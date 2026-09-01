@@ -1,0 +1,240 @@
+//@version=6
+// =============================================================
+// Force of Nature (IndicatorFON) — Pine v6 port of ForceOfNature.tos
+// -------------------------------------------------------------
+// Highest-probability Fib ratios only + Golden Pocket emphasis
+// + Fib Time/Cycles + Anchored VWAP + Fan proximity
+// + HTF Trend + Quality PA + Volume + RSI Extreme/Divergence
+// Rare, high-confidence signals only
+//
+// Deliberate deviations from the thinkScript original
+// (see docs/pine-conversion.md for the full rationale):
+//  1. HTF swing levels are running extremes of confirmed pivots.
+//     thinkScript's HighestAll/LowestAll scans the whole chart including
+//     future bars, which Pine forbids — historical signals will differ
+//     here, and are the more realistic of the two.
+//  2. HTF pivots and the trend EMA are computed on their own timeframe's
+//     bars, sized by that timeframe's own ATR — not on chart bars over a
+//     step-function series with the chart's ATR.
+//  3. Recursive defs and the dynamic-length anchored-VWAP Sum are
+//     replaced by var state and a cumulative-reset window.
+//  Minor: ta.pivothigh/pivotlow tie-handling at perfectly flat
+//  tops/bottoms differs slightly from the thinkScript == Highest check.
+// =============================================================
+
+indicator("Force of Nature (IndicatorFON)", "FON", overlay = true)
+
+// ---------- Inputs ----------
+showSignals         = input.bool(true,  "Show signals")
+confluenceThreshold = input.float(7.5,  "Confluence score threshold", minval = 0, step = 0.5)
+tolerancePct        = input.float(0.10, "Level tolerance (ATR multiple)", minval = 0, step = 0.01)
+timeToleranceBars   = input.int(2,      "Time window tolerance (bars)", minval = 0)
+minSwingATR         = input.float(1.5,  "Min chart swing size (ATR multiple)", minval = 0, step = 0.1)
+requireVolume       = input.bool(true,  "Require volume surge")
+volumeMult          = input.float(1.3,  "Volume multiple", minval = 0, step = 0.1)
+requireHTFTrend     = input.bool(true,  "Require HTF trend alignment")
+htfTF               = input.timeframe("D", "HTF trend timeframe")
+requireRSI          = input.bool(true,  "Require RSI condition")
+rsiLength           = input.int(14,     "RSI length", minval = 1)
+rsiOversold         = input.float(40,   "RSI oversold", minval = 0, maxval = 100)
+rsiOverbought       = input.float(60,   "RSI overbought", minval = 0, maxval = 100)
+showDashboard       = input.bool(true,  "Show dashboard")
+showAVWAP           = input.bool(true,  "Show anchored VWAP")
+
+// thinkScript Average(TrueRange(...)) is a simple MA of true range — not ta.atr, which is RMA-smoothed
+atr    = ta.sma(ta.tr(true), 14)
+tol    = atr * tolerancePct
+volAvg = ta.sma(volume, 20)
+
+// ---------- Significant Swing Detection (chart timeframe) ----------
+minSizeMain = atr * minSwingATR
+
+phRaw = ta.pivothigh(high, 5, 5)
+plRaw = ta.pivotlow(low, 5, 5)
+phOK  = not na(phRaw) and (phRaw - ta.lowest(high, 11)) >= minSizeMain
+plOK  = not na(plRaw) and (ta.highest(low, 11) - plRaw) >= minSizeMain
+
+var float lastSwingHigh    = na
+var float lastSwingLow     = na
+var int   lastSwingHighBar = na
+var int   lastSwingLowBar  = na
+
+if phOK
+    lastSwingHigh    := phRaw
+    lastSwingHighBar := bar_index - 5
+if plOK
+    lastSwingLow    := plRaw
+    lastSwingLowBar := bar_index - 5
+
+swingsReady  = not na(lastSwingHighBar) and not na(lastSwingLowBar)
+lastSwingBar = swingsReady ? math.max(lastSwingHighBar, lastSwingLowBar) : na
+prevSwingBar = swingsReady ? math.min(lastSwingHighBar, lastSwingLowBar) : na
+isUpSwing    = swingsReady and lastSwingHighBar > lastSwingLowBar
+
+// ---------- Key Higher Timeframe Swings ----------
+// Running extremes of confirmed pivots, evaluated on the HTF's own bars
+// and sized by that timeframe's own ATR (port notes 1 and 2)
+htfSwings(int l, int r, float minMult) =>
+    float atrTF = ta.sma(ta.tr(true), 14)
+    float ph = ta.pivothigh(high, l, r)
+    float pl = ta.pivotlow(low, l, r)
+    bool okH = not na(ph) and (ph - ta.lowest(high, l + r + 1)) >= atrTF * minMult
+    bool okL = not na(pl) and (ta.highest(low, l + r + 1) - pl) >= atrTF * minMult
+    var float sh = na
+    var float sl = na
+    if okH
+        sh := math.max(nz(sh, ph), ph)
+    if okL
+        sl := math.min(nz(sl, pl), pl)
+    [sh, sl]
+
+[shD,  slD]  = request.security(syminfo.tickerid, "D",   htfSwings(3, 3, 2.0), lookahead = barmerge.lookahead_off)
+[sh4H, sl4H] = request.security(syminfo.tickerid, "240", htfSwings(3, 3, 1.5), lookahead = barmerge.lookahead_off)
+[sh1H, sl1H] = request.security(syminfo.tickerid, "60",  htfSwings(3, 3, 1.0), lookahead = barmerge.lookahead_off)
+[shW,  slW]  = request.security(syminfo.tickerid, "W",   htfSwings(2, 2, 3.0), lookahead = barmerge.lookahead_off)
+
+// ---------- Weighted Fib Score (Golden Pocket emphasis) ----------
+fibScore(float hi, float lo, float price, float tolerance) =>
+    float s = 0.0
+    if not na(hi) and not na(lo)
+        rng  = hi - lo
+        f382 = lo + 0.382 * rng
+        f50  = lo + 0.500 * rng
+        f618 = lo + 0.618 * rng
+        f65  = lo + 0.650 * rng
+        f127 = hi + 0.272 * rng
+        f161 = hi + 0.618 * rng
+        inGoldenPocket = price >= f618 and price <= f65
+        s += (math.abs(price - f618) <= tolerance or inGoldenPocket) ? 3.5 : 0.0
+        s += math.abs(price - f50)  <= tolerance ? 2.5 : 0.0
+        s += math.abs(price - f382) <= tolerance ? 2.0 : 0.0
+        s += math.abs(price - f127) <= tolerance ? 1.5 : 0.0
+        s += math.abs(price - f161) <= tolerance ? 1.5 : 0.0
+    s
+
+scoreD    = fibScore(shD,  slD,  close, tol)
+score4H   = fibScore(sh4H, sl4H, close, tol)
+score1H   = fibScore(sh1H, sl1H, close, tol)
+scoreW    = fibScore(shW,  slW,  close, tol)
+scoreMain = fibScore(lastSwingHigh, lastSwingLow, close, tol)
+
+priceConfluenceScore = scoreD + score4H + score1H + scoreW + scoreMain
+isPriceConfluence    = priceConfluenceScore >= confluenceThreshold
+
+// ---------- Fib Time + Cycle Windows ----------
+span = swingsReady ? math.max(lastSwingBar - prevSwingBar, 1) : na
+
+inTimeWindow(float t) =>
+    not na(t) and math.abs(bar_index - t) <= timeToleranceBars
+
+t382 = swingsReady ? lastSwingBar + math.round(span * 0.382) : na
+t500 = swingsReady ? lastSwingBar + math.round(span * 0.500) : na
+t618 = swingsReady ? lastSwingBar + math.round(span * 0.618) : na
+t100 = swingsReady ? lastSwingBar + span : na
+t161 = swingsReady ? lastSwingBar + math.round(span * 1.618) : na
+
+isTimeWindow = inTimeWindow(t382) or inTimeWindow(t500) or inTimeWindow(t618) or
+  inTimeWindow(t100) or inTimeWindow(t161)
+
+// ---------- Anchored VWAP ----------
+// Cumulative-reset replication of Sum(x, barsSince): a new anchor always
+// confirms exactly 5 bars after the pivot, so the window re-seeds with the
+// last 6 bars (pivot bar through the confirmation bar)
+var float cumPV     = na
+var float cumV      = na
+var int   anchorBar = na
+
+if swingsReady and (na(anchorBar) or lastSwingBar != anchorBar)
+    anchorBar := lastSwingBar
+    cumPV := math.sum(close * volume, 6)
+    cumV  := math.sum(volume, 6)
+else if not na(anchorBar)
+    cumPV += close * volume
+    cumV  += volume
+
+avwap     = not na(cumV) and cumV != 0 ? cumPV / cumV : na
+nearAVWAP = not na(avwap) and math.abs(close - avwap) <= atr * 0.12
+
+// ---------- Fibonacci Fan Proximity ----------
+fanRange = lastSwingHigh - lastSwingLow
+fanSlope = swingsReady ? fanRange / span : na
+
+fanLevel(float ratio) =>
+    float lvl = na
+    if swingsReady
+        lvl := isUpSwing ? lastSwingLow + fanSlope * ratio * (bar_index - lastSwingLowBar) : lastSwingHigh - fanSlope * ratio * (bar_index - lastSwingHighBar)
+    lvl
+
+fan382 = fanLevel(0.382)
+fan50  = fanLevel(0.500)
+fan618 = fanLevel(0.618)
+
+nearFan = not na(fan382) and (math.abs(close - fan382) <= tol or
+  math.abs(close - fan50) <= tol or math.abs(close - fan618) <= tol)
+
+// ---------- HTF Trend Filter ----------
+[htfClose, htfEMA] = request.security(syminfo.tickerid, htfTF, [close, ta.ema(close, 21)], lookahead = barmerge.lookahead_off)
+htfTrendUp   = not na(htfEMA) and htfClose > htfEMA
+htfTrendDown = not na(htfEMA) and htfClose < htfEMA
+
+// ---------- Quality Price Action + Volume ----------
+bullPA = low < low[1] and close > open and close > close[1] and
+  (close - low) > 0.60 * (high - low)
+bearPA = high > high[1] and close < open and close < close[1] and
+  (high - close) > 0.60 * (high - low)
+
+volOK = not requireVolume or volume > volAvg * volumeMult
+
+// ---------- RSI Extreme + Simple Regular Divergence ----------
+rsi = ta.rsi(close, rsiLength)
+
+rsiExtremeBull = rsi <= rsiOversold
+rsiExtremeBear = rsi >= rsiOverbought
+
+priceLL = low < ta.lowest(low[1], 6)
+rsiHL   = rsi > ta.highest(rsi[1], 6)
+bullDiv = priceLL and rsiHL
+
+priceHH = high > ta.highest(high[1], 6)
+rsiLH   = rsi < ta.lowest(rsi[1], 6)
+bearDiv = priceHH and rsiLH
+
+rsiBullOK = not requireRSI or rsiExtremeBull or bullDiv
+rsiBearOK = not requireRSI or rsiExtremeBear or bearDiv
+
+// ---------- FULL HIGH-CONVICTION CONFLUENCE ----------
+bullConfluence = swingsReady and isPriceConfluence and isTimeWindow and
+  nearAVWAP and nearFan and bullPA and volOK and rsiBullOK and
+  (not requireHTFTrend or htfTrendUp)
+
+bearConfluence = swingsReady and isPriceConfluence and isTimeWindow and
+  nearAVWAP and nearFan and bearPA and volOK and rsiBearOK and
+  (not requireHTFTrend or htfTrendDown)
+
+// ---------- Signals ----------
+plotshape(showSignals and bullConfluence, "Bull signal", shape.triangleup,
+  location.belowbar, color.new(color.aqua, 0), size = size.small)
+plotshape(showSignals and bearConfluence, "Bear signal", shape.triangledown,
+  location.abovebar, color.new(color.fuchsia, 0), size = size.small)
+
+alertcondition(bullConfluence, "FON Bull", "Force of Nature: bullish confluence on {{ticker}} {{interval}}")
+alertcondition(bearConfluence, "FON Bear", "Force of Nature: bearish confluence on {{ticker}} {{interval}}")
+
+// ---------- Anchored VWAP Line ----------
+plot(showAVWAP ? avwap : na, "AVWAP", color.new(color.yellow, 0), 2, plot.style_linebr)
+
+// ---------- Dashboard ----------
+var table dash = showDashboard ? table.new(position.top_left, 6, 1) : na
+
+if showDashboard and barstate.islast
+    sigActive = bullConfluence or bearConfluence
+    bg  = sigActive ? color.new(color.green, 55) : color.new(color.gray, 70)
+    txt = color.white
+    rsiMark = sigActive ? "✓" : rsiBullOK or rsiBearOK ? "·" : "×"
+    htfMark = htfTrendUp ? "▲" : htfTrendDown ? "▼" : "─"
+    table.cell(dash, 0, 0, "Score: " + str.tostring(priceConfluenceScore, "0.0"), bgcolor = bg, text_color = txt)
+    table.cell(dash, 1, 0, "Time: "  + (isTimeWindow ? "✓" : "×"), bgcolor = bg, text_color = txt)
+    table.cell(dash, 2, 0, "AVWAP: " + (nearAVWAP ? "✓" : "×"), bgcolor = bg, text_color = txt)
+    table.cell(dash, 3, 0, "Fan: "   + (nearFan ? "✓" : "×"), bgcolor = bg, text_color = txt)
+    table.cell(dash, 4, 0, "RSI: "   + rsiMark, bgcolor = bg, text_color = txt)
+    table.cell(dash, 5, 0, "HTF: "   + htfMark, bgcolor = bg, text_color = txt)

@@ -13,8 +13,9 @@
 
 Force of Nature is a chart study written in **thinkScript** for the thinkorswim platform. It is built around one idea: **a signal is only worth taking when many independent techniques agree at the same price, at the same time.** Instead of firing on any single indicator, it runs eight analysis stages in parallel and plots an arrow only when *every* gate passes — by design, signals are rare.
 
-- **Source:** [`ForceOfNature.tos`](ForceOfNature.tos)
-- **Pine Script port feasibility:** [`docs/pine-conversion.md`](docs/pine-conversion.md)
+- **thinkorswim source:** [`ForceOfNature.tos`](ForceOfNature.tos)
+- **TradingView source (Pine v6):** [`ForceOfNature.pine`](ForceOfNature.pine)
+- **Port analysis:** [`docs/pine-conversion.md`](docs/pine-conversion.md)
 
 ---
 
@@ -224,6 +225,12 @@ The label turns **green** when a full signal is active, otherwise stays gray.
 
 ## TradingView / Pine Script port
 
-A full feasibility analysis lives in [`docs/pine-conversion.md`](docs/pine-conversion.md).
+The port is implemented in [`ForceOfNature.pine`](ForceOfNature.pine) (Pine Script v6). To install: TradingView → **Pine Editor** → paste the file contents → **Add to chart**. The Pine version adds native `alertcondition` hooks for both signals, so TradingView alerts (push / email / webhook) work out of the box.
 
-**Short version: yes — the study is fully portable to Pine Script v6** (~200 lines). Roughly 90% of the code maps one-to-one (pivots, MTF data, RSI/EMA, plotting, dashboard). Three areas need redesign rather than translation: the `HighestAll` whole-chart scans (no Pine equivalent — replaced by running pivot tracking, which also *removes* the lookahead bias), the dynamic-length `Sum` used by the anchored VWAP (replaced by the idiomatic cumulative-reset pattern), and thinkScript's implicit recursion (replaced by `var` variables). Expect historical signals to differ from thinkorswim precisely because the port would be *more* honest about what was knowable in real time.
+A full feasibility analysis and construct-mapping table lives in [`docs/pine-conversion.md`](docs/pine-conversion.md). Roughly 90% of the code maps one-to-one (pivots, MTF data, RSI/EMA, plotting, dashboard). Three areas were redesigned rather than translated:
+
+1. **`HighestAll` whole-chart scans** — no Pine equivalent (they read future bars). Replaced by running extremes of confirmed HTF pivots, which also *removes* the lookahead bias.
+2. **Dynamic-length `Sum`** for the anchored VWAP — replaced by the idiomatic cumulative-reset pattern.
+3. **Implicit recursion** — replaced by `var` variables.
+
+Expect historical signals to differ between the two platforms precisely because the Pine version is *more* honest about what was knowable in real time; on the live edge they should agree closely.

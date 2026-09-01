@@ -1,5 +1,7 @@
 # Porting Force of Nature to Pine Script (TradingView)
 
+> **Status: implemented.** The port described below now exists at [`../ForceOfNature.pine`](../ForceOfNature.pine), following the plan and redesign decisions in this document.
+
 **Verdict: fully feasible.** The study can be ported to a single Pine Script v6 indicator of roughly 180–220 lines. About 90% of the thinkScript maps one-to-one onto Pine built-ins. Three constructs have no direct equivalent and must be *redesigned* rather than translated — and one of those redesigns actually fixes a lookahead bias in the original.
 
 ---
