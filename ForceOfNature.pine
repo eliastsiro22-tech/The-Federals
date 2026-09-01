@@ -310,6 +310,11 @@ bearSig = bearConfluence and canFire
 if bullSig or bearSig
     lastSigBar := bar_index
 
+// "armed": full setup context in place, awaiting only the trigger bar
+// (price action + volume). Exposed as plots for the Pine Screener.
+armedBull = isPriceConfluence and contextOK and rsiBullOK and (not requireHTFTrend or htfTrendUp)
+armedBear = isPriceConfluence and contextOK and rsiBearOK and (not requireHTFTrend or htfTrendDown)
+
 // ---------- Diagnostics (status line + data window, nothing on the pane) ----------
 // hover any bar with the Data Window open to see which gates pass (1) or fail (0)
 plot(priceConfluenceScore, "Score", color.gray, display = display.status_line + display.data_window)
@@ -325,6 +330,8 @@ plot(rsiBullOK ? 1 : 0, "Gate: RSI bull", display = display.data_window)
 plot(rsiBearOK ? 1 : 0, "Gate: RSI bear", display = display.data_window)
 plot(htfTrendUp ? 1 : 0, "Gate: HTF trend up", display = display.data_window)
 plot(contextCount, "Context gates (0-3)", display = display.data_window)
+plot(armedBull ? 1 : 0, "Armed bull", display = display.data_window)
+plot(armedBear ? 1 : 0, "Armed bear", display = display.data_window)
 plot(scoreMain, "Score: chart grid", display = display.data_window)
 plot(scoreD, "Score: daily grid", display = display.data_window)
 plot(score4H, "Score: 4H grid", display = display.data_window)

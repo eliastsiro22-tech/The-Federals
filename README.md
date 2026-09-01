@@ -168,6 +168,14 @@ When comparing the two platforms, match the **extended-hours setting** on both �
 
 ---
 
+## Scanning for candidates
+
+Scanning for the *full* signal returns almost nothing — the trigger bar is a one-bar event. The productive workflow is a two-stage funnel: scan for **armed** symbols (score + context votes + RSI + trend all in place, only the trigger bar missing), then set bar-close alerts on the shortlist.
+
+**TradingView (Pine Screener):** save the indicator in the Pine Editor and mark it as a favorite (⭐), then open the **Pine Screener**, pick a watchlist, select *Force of Nature (IndicatorFON)*, set the timeframe (1h recommended), and filter on **`Armed bull` / `Armed bear` = 1** (or `Bull now` / `Bear now` = 1 for fired signals). Requires a paid TradingView plan; re-run on demand.
+
+**thinkorswim (Stock Hacker):** scans forbid secondary aggregations, so use the scan-adapted [`ForceOfNature_Scan.tos`](ForceOfNature_Scan.tos): Scan tab → Stock Hacker → **Add study filter** → click the pencil → **thinkScript Editor** tab → paste → set the filter's aggregation to **1h**. The `mode` input selects Armed vs Signal, `direction` selects Bull/Bear/Either. Note the approximations documented in the file header (weekly grid omitted → threshold default 6.0; 4H/daily ranges approximated in RTH hourly bars; long-EMA trend proxy) — treat scan hits as candidates to confirm on the chart study, not as signals.
+
 ## Design notes & caveats
 
 - **Signals are rare by design** — five hard gates, a 2-of-3 context vote, and a cooldown. Use the dashboard/Data Window to see how close conditions are; loosen `confluenceThreshold` or gate toggles to trade frequency for selectivity.
