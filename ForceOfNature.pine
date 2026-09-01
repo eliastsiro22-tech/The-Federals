@@ -333,8 +333,8 @@ plot(scoreW, "Score: weekly grid", display = display.data_window)
 
 // ---------- Signals ----------
 // (display.pane — the status line already shows "Bull now"/"Bear now")
-plotshape(showSignals and bullSig, "Bull signal", shape.triangleup, location.belowbar, color.new(color.aqua, 0), size = size.small, display = display.pane)
-plotshape(showSignals and bearSig, "Bear signal", shape.triangledown, location.abovebar, color.new(color.fuchsia, 0), size = size.small, display = display.pane)
+plotshape(showSignals and bullSig, "Bull signal", shape.triangleup, location.belowbar, color.new(color.aqua, 0), size = size.normal, display = display.pane)
+plotshape(showSignals and bearSig, "Bear signal", shape.triangledown, location.abovebar, color.new(color.fuchsia, 0), size = size.normal, display = display.pane)
 
 alertcondition(bullSig, "FON Bull", "Force of Nature: bullish confluence on {{ticker}} {{interval}}")
 alertcondition(bearSig, "FON Bear", "Force of Nature: bearish confluence on {{ticker}} {{interval}}")
