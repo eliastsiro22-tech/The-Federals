@@ -1,2 +1,236 @@
 # The-Federals
 IndicatorFON
+# Force_of_Nature
+# Highest-probability Fib ratios only + Golden Pocket emphasis
+# + Fib Time/Cycles + Anchored VWAP + Fan proximity
+# + HTF Trend + Quality PA + Volume + RSI Extreme/Divergence
+# Rare, high-confidence signals only
+
+declare upper;
+
+input showSignals           = yes;
+input confluenceThreshold   = 7.5;      # Weighted score threshold
+input tolerancePct          = 0.10;
+input timeToleranceBars     = 2;
+input minSwingATR           = 1.5;
+input requireVolume         = yes;
+input volumeMult            = 1.3;
+input requireHTFTrend       = yes;
+input htfAgg                = AggregationPeriod.DAY;
+input requireRSI            = yes;
+input rsiLength             = 14;
+input rsiOversold           = 40;
+input rsiOverbought         = 60;
+input showDashboard         = yes;
+input showAVWAP             = yes;
+
+def na = Double.NaN;
+def bn = BarNumber();
+def atr = Average(TrueRange(high, close, low), 14);
+def tol = atr * tolerancePct;
+def volAvg = Average(volume, 20);
+
+# ---------- Improved Significant Swing Detection ----------
+script getSwingHigh {
+    input price = high;
+    input left = 5;
+    input right = 5;
+    input minSize = 0.0;
+    def isSwing = price[left] == Highest(price, left + right + 1) and
+                  (price[left] - Lowest(price, left + right + 1)) >= minSize;
+    plot out = if isSwing then price[left] else Double.NaN;
+}
+
+script getSwingLow {
+    input price = low;
+    input left = 5;
+    input right = 5;
+    input minSize = 0.0;
+    def isSwing = price[left] == Lowest(price, left + right + 1) and
+                  (Highest(price, left + right + 1) - price[left]) >= minSize;
+    plot out = if isSwing then price[left] else Double.NaN;
+}
+
+def minSizeMain = atr * minSwingATR;
+def shMain = getSwingHigh(high, 5, 5, minSizeMain);
+def slMain = getSwingLow(low, 5, 5, minSizeMain);
+
+def lastSwingHighBar = if !IsNaN(shMain) then bn - 5 else lastSwingHighBar[1];
+def lastSwingLowBar  = if !IsNaN(slMain) then bn - 5 else lastSwingLowBar[1];
+def lastSwingHigh    = if !IsNaN(shMain) then shMain else lastSwingHigh[1];
+def lastSwingLow     = if !IsNaN(slMain) then slMain else lastSwingLow[1];
+
+def lastSwingBar = Max(lastSwingHighBar, lastSwingLowBar);
+def prevSwingBar = Min(lastSwingHighBar, lastSwingLowBar);
+def isUpSwing    = lastSwingHighBar > lastSwingLowBar;
+
+# ---------- Key Higher Timeframe Swings ----------
+def hD  = high(period = AggregationPeriod.DAY);
+def lD  = low(period  = AggregationPeriod.DAY);
+def h4H = high(period = AggregationPeriod.FOUR_HOURS);
+def l4H = low(period  = AggregationPeriod.FOUR_HOURS);
+def h1H = high(period = AggregationPeriod.HOUR);
+def l1H = low(period  = AggregationPeriod.HOUR);
+def hW  = high(period = AggregationPeriod.WEEK);
+def lW  = low(period  = AggregationPeriod.WEEK);
+
+def shD  = HighestAll(getSwingHigh(hD,  3, 3, atr * 2.0));
+def slD  = LowestAll(getSwingLow(lD,   3, 3, atr * 2.0));
+def sh4H = HighestAll(getSwingHigh(h4H, 3, 3, atr * 1.5));
+def sl4H = LowestAll(getSwingLow(l4H,  3, 3, atr * 1.5));
+def sh1H = HighestAll(getSwingHigh(h1H, 3, 3, atr * 1.0));
+def sl1H = LowestAll(getSwingLow(l1H,  3, 3, atr * 1.0));
+def shW  = HighestAll(getSwingHigh(hW,  2, 2, atr * 3.0));
+def slW  = LowestAll(getSwingLow(lW,   2, 2, atr * 3.0));
+
+# ---------- Weighted Fib Score (Golden Pocket emphasis) ----------
+script fibScore {
+    input hi = 0.0;
+    input lo = 0.0;
+    input price = close;
+    input tol = 0.0;
+
+    def range = hi - lo;
+    def f382  = lo + 0.382 * range;
+    def f50   = lo + 0.500 * range;
+    def f618  = lo + 0.618 * range;
+    def f65   = lo + 0.650 * range;
+    def f127  = hi + 0.272 * range;
+    def f161  = hi + 0.618 * range;
+
+    def inGoldenPocket = price >= f618 and price <= f65;
+
+    def s =
+        (if AbsValue(price - f618) <= tol or inGoldenPocket then 3.5 else 0.0) +
+        (if AbsValue(price - f50)  <= tol then 2.5 else 0.0) +
+        (if AbsValue(price - f382) <= tol then 2.0 else 0.0) +
+        (if AbsValue(price - f127) <= tol then 1.5 else 0.0) +
+        (if AbsValue(price - f161) <= tol then 1.5 else 0.0);
+    plot out = s;
+}
+
+def scoreD     = fibScore(shD,  slD,  close, tol);
+def score4H    = fibScore(sh4H, sl4H, close, tol);
+def score1H    = fibScore(sh1H, sl1H, close, tol);
+def scoreW     = fibScore(shW,  slW,  close, tol);
+def scoreMain  = fibScore(lastSwingHigh, lastSwingLow, close, tol);
+
+def priceConfluenceScore = scoreD + score4H + score1H + scoreW + scoreMain;
+def isPriceConfluence    = priceConfluenceScore >= confluenceThreshold;
+
+# ---------- Fib Time + Cycle Windows ----------
+def span = Max(lastSwingBar - prevSwingBar, 1);
+def t382 = lastSwingBar + Round(span * 0.382);
+def t500 = lastSwingBar + Round(span * 0.500);
+def t618 = lastSwingBar + Round(span * 0.618);
+def t100 = lastSwingBar + span;
+def t161 = lastSwingBar + Round(span * 1.618);
+
+def isTimeWindow =
+    AbsValue(bn - t382) <= timeToleranceBars or
+    AbsValue(bn - t500) <= timeToleranceBars or
+    AbsValue(bn - t618) <= timeToleranceBars or
+    AbsValue(bn - t100) <= timeToleranceBars or
+    AbsValue(bn - t161) <= timeToleranceBars;
+
+# ---------- Anchored VWAP ----------
+def barsSince = bn - lastSwingBar + 1;
+def cumPV = Sum(close * volume, barsSince);
+def cumV  = Sum(volume, barsSince);
+def avwap = if bn >= lastSwingBar and cumV != 0 then cumPV / cumV else na;
+def nearAVWAP = AbsValue(close - avwap) <= atr * 0.12;
+
+# ---------- Fibonacci Fan Proximity ----------
+def fanRange = lastSwingHigh - lastSwingLow;
+def fanSlope = fanRange / span;
+
+def fan382 = if isUpSwing then lastSwingLow + fanSlope * 0.382 * (bn - lastSwingLowBar)
+                          else lastSwingHigh - fanSlope * 0.382 * (bn - lastSwingHighBar);
+def fan50  = if isUpSwing then lastSwingLow + fanSlope * 0.500 * (bn - lastSwingLowBar)
+                          else lastSwingHigh - fanSlope * 0.500 * (bn - lastSwingHighBar);
+def fan618 = if isUpSwing then lastSwingLow + fanSlope * 0.618 * (bn - lastSwingLowBar)
+                          else lastSwingHigh - fanSlope * 0.618 * (bn - lastSwingHighBar);
+
+def nearFan = AbsValue(close - fan382) <= tol or
+              AbsValue(close - fan50)  <= tol or
+              AbsValue(close - fan618) <= tol;
+
+# ---------- HTF Trend Filter ----------
+def htfClose = close(period = htfAgg);
+def htfEMA   = ExpAverage(htfClose, 21);
+def htfTrendUp   = htfClose > htfEMA;
+def htfTrendDown = htfClose < htfEMA;
+
+# ---------- Quality Price Action + Volume ----------
+def bullPA = low < low[1] and close > open and close > close[1] and
+             (close - low) > 0.60 * (high - low);
+def bearPA = high > high[1] and close < open and close < close[1] and
+             (high - close) > 0.60 * (high - low);
+
+def volOK = !requireVolume or volume > volAvg * volumeMult;
+
+# ---------- RSI Extreme + Simple Regular Divergence ----------
+def rsi = RSI(length = rsiLength);
+
+def rsiExtremeBull = rsi <= rsiOversold;
+def rsiExtremeBear = rsi >= rsiOverbought;
+
+def priceLL = low < lowest(low[1], 6);
+def rsiHL   = rsi > highest(rsi[1], 6);
+def bullDiv = priceLL and rsiHL;
+
+def priceHH = high > highest(high[1], 6);
+def rsiLH   = rsi < lowest(rsi[1], 6);
+def bearDiv = priceHH and rsiLH;
+
+def rsiBullOK = !requireRSI or rsiExtremeBull or bullDiv;
+def rsiBearOK = !requireRSI or rsiExtremeBear or bearDiv;
+
+# ---------- FULL HIGH-CONVICTION CONFLUENCE ----------
+def bullConfluence =
+    isPriceConfluence and
+    isTimeWindow and
+    nearAVWAP and
+    nearFan and
+    bullPA and
+    volOK and
+    rsiBullOK and
+    (!requireHTFTrend or htfTrendUp);
+
+def bearConfluence =
+    isPriceConfluence and
+    isTimeWindow and
+    nearAVWAP and
+    nearFan and
+    bearPA and
+    volOK and
+    rsiBearOK and
+    (!requireHTFTrend or htfTrendDown);
+
+# ---------- Signals ----------
+plot BullSignal = if showSignals and bullConfluence then low - atr * 0.45 else na;
+BullSignal.SetPaintingStrategy(PaintingStrategy.ARROW_UP);
+BullSignal.SetDefaultColor(Color.CYAN);
+BullSignal.SetLineWeight(4);
+
+plot BearSignal = if showSignals and bearConfluence then high + atr * 0.45 else na;
+BearSignal.SetPaintingStrategy(PaintingStrategy.ARROW_DOWN);
+BearSignal.SetDefaultColor(Color.MAGENTA);
+BearSignal.SetLineWeight(4);
+
+# ---------- Anchored VWAP Line ----------
+plot AVWAPLine = if showAVWAP then avwap else na;
+AVWAPLine.SetDefaultColor(Color.YELLOW);
+AVWAPLine.SetStyle(Curve.SHORT_DASH);
+AVWAPLine.SetLineWeight(2);
+
+# ---------- Dashboard ----------
+AddLabel(showDashboard,
+    "Score: " + Round(priceConfluenceScore, 1) +
+    " | Time: " + (if isTimeWindow then "✓" else "×") +
+    " | AVWAP: " + (if nearAVWAP then "✓" else "×") +
+    " | Fan: " + (if nearFan then "✓" else "×") +
+    " | RSI: " + (if (bullConfluence or bearConfluence) then "✓" else if rsiBullOK or rsiBearOK then "·" else "×") +
+    " | HTF: " + (if htfTrendUp then "▲" else if htfTrendDown then "▼" else "─"),
+    if bullConfluence or bearConfluence then Color.GREEN else Color.GRAY
+);
