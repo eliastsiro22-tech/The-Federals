@@ -345,6 +345,9 @@ plotshape(showSignals and bearSig, "Bear signal", shape.triangledown, location.a
 
 alertcondition(bullSig, "FON Bull", "Force of Nature: bullish confluence on {{ticker}} {{interval}}")
 alertcondition(bearSig, "FON Bear", "Force of Nature: bearish confluence on {{ticker}} {{interval}}")
+// combined conditions: one alert slot per symbol instead of two
+alertcondition(bullSig or bearSig, "FON Any signal", "Force of Nature: signal on {{ticker}} {{interval}}")
+alertcondition((armedBull and not armedBull[1]) or (armedBear and not armedBear[1]), "FON Armed", "Force of Nature: {{ticker}} {{interval}} armed — watch for trigger bar")
 
 // ---------- Anchored VWAP Line ----------
 plot(showAVWAP ? avwap : na, "AVWAP", color.new(color.yellow, 0), 2, plot.style_linebr)
