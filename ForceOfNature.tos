@@ -108,7 +108,10 @@ script fibScore {
         (if AbsValue(price - f382) <= tol then 2.0 else 0.0) +
         (if AbsValue(price - f127) <= tol then 1.5 else 0.0) +
         (if AbsValue(price - f161) <= tol then 1.5 else 0.0);
-    plot out = s;
+    # NaN guard: a timeframe with no qualifying swings must contribute 0 —
+    # otherwise NaN poisons the summed score and silently disables every
+    # signal on the chart (Score shows N/A in the dashboard)
+    plot out = if IsNaN(range) or IsNaN(tol) then 0.0 else s;
 }
 
 def scoreD     = fibScore(shD,  slD,  close, tol);
