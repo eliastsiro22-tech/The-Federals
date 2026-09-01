@@ -227,10 +227,14 @@ The label turns **green** when a full signal is active, otherwise stays gray.
 
 The port is implemented in [`ForceOfNature.pine`](ForceOfNature.pine) (Pine Script v6). To install: TradingView → **Pine Editor** → paste the file contents → **Add to chart**. The Pine version adds native `alertcondition` hooks for both signals, so TradingView alerts (push / email / webhook) work out of the box.
 
-A full feasibility analysis and construct-mapping table lives in [`docs/pine-conversion.md`](docs/pine-conversion.md). Roughly 90% of the code maps one-to-one (pivots, MTF data, RSI/EMA, plotting, dashboard). Three areas were redesigned rather than translated:
+A full feasibility analysis and construct-mapping table lives in [`docs/pine-conversion.md`](docs/pine-conversion.md).
 
-1. **`HighestAll` whole-chart scans** — no Pine equivalent (they read future bars). Replaced by running extremes of confirmed HTF pivots, which also *removes* the lookahead bias.
-2. **Dynamic-length `Sum`** for the anchored VWAP — replaced by the idiomatic cumulative-reset pattern.
-3. **Implicit recursion** — replaced by `var` variables.
+**Parity mode (default).** The port reproduces thinkorswim behavior as closely as the platform allows:
 
-Expect historical signals to differ between the two platforms precisely because the Pine version is *more* honest about what was knowable in real time; on the live edge they should agree closely.
+- HTF data is fetched exactly like thinkScript's `high(period = …)`: historical chart bars carry the period's *final* value (`lookahead_on`), the live bar the developing value. HTF pivots run on **chart bars** over those step series, sized by the **chart's** ATR — precisely what the original does.
+- `HighestAll` / `LowestAll` (whole-chart scans, including bars to the right) are emulated with a two-pass recomputation: running extremes equal thinkorswim's values at the last bar, and historical signals are recomputed against those final extremes and drawn as labels — matching thinkorswim's repainted history.
+- The anchored VWAP replicates the dynamic-length `Sum` exactly (cumulative reset re-seeded with the 6 bars back to each new pivot); the trend filter is the EMA over chart bars of the HTF close step series, quirks and all; thinkScript's 2-digit `Round()` default is replicated in the time windows.
+
+**Causal mode** (turn off *Match thinkorswim history*) draws only signals that were knowable in real time — better for honest backtesting; historical arrows will differ from thinkorswim by design.
+
+**Chart-timeframe requirement.** The original study can only load on thinkorswim charts of **1 hour or lower** — on higher charts thinkorswim rejects the 1H/4H aggregation requests outright ("secondary period should not be less than primary"). The Pine port instead disables grids below the chart's timeframe and shows the active count in the dashboard (`Grids: n/5`). On a daily chart only 3 of 5 grids exist, so the default 7.5 threshold is rarely reachable — compare against thinkorswim on a matching intraday chart (5m–1H), or lower the threshold when working on daily charts.

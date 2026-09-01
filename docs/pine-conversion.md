@@ -1,6 +1,16 @@
 # Porting Force of Nature to Pine Script (TradingView)
 
-> **Status: implemented.** The port described below now exists at [`../ForceOfNature.pine`](../ForceOfNature.pine), following the plan and redesign decisions in this document.
+> **Status: implemented (parity revision).** The port exists at [`../ForceOfNature.pine`](../ForceOfNature.pine). The first iteration followed the causal redesigns described below; a field comparison showed those redesigns changed signal behavior materially, so the shipped version defaults to a **thinkorswim-parity mode** and keeps the causal behavior as an option. See the revision notes directly below.
+
+## Parity revision notes
+
+The first port "improved" three things that turned out to define the original's character, suppressing nearly all signals:
+
+1. **HTF pivot context.** The original runs its 3/3-bar pivots on *chart bars* over the HTF step series, sized by the *chart's* ATR — so on an intraday chart nearly every weekly/daily wiggle qualifies as a swing. Computing pivots on the HTF's own bars with the HTF's own ATR (as the first port did) is orders of magnitude stricter — e.g. a weekly grid then needs a 3×-weekly-ATR move within 5 weekly bars — which starves the confluence score. The parity version replicates the original's chart-bar step-series pivots exactly.
+2. **MTF semantics.** thinkScript gives historical bars the HTF period's *final* value (within-period lookahead); `lookahead_off` gives them the *prior* period's value. Parity requires `lookahead_on`, which reproduces thinkorswim exactly on both historical and live bars.
+3. **`HighestAll` history.** Running extremes match thinkorswim only at the last bar. The parity version therefore recomputes all historical signals against the last-bar extremes (which equal `HighestAll` over the loaded chart) and draws them as labels — matching thinkorswim's repainted history bar-for-bar. The causal mode (input toggle) keeps the non-repainting behavior for honest backtesting.
+
+Also replicated for parity: the trend filter's EMA over chart bars of the step series (not a true HTF EMA), thinkScript `Round()`'s 2-digit default in the time windows, and `==`-based pivot tie handling instead of `ta.pivothigh`. Grids below the chart timeframe are disabled — thinkorswim refuses to load the study there at all, which is why the original only runs on charts of 1H or lower.
 
 **Verdict: fully feasible.** The study can be ported to a single Pine Script v6 indicator of roughly 180–220 lines. About 90% of the thinkScript maps one-to-one onto Pine built-ins. Three constructs have no direct equivalent and must be *redesigned* rather than translated — and one of those redesigns actually fixes a lookahead bias in the original.
 
