@@ -136,9 +136,12 @@ def isTimeWindow =
     AbsValue(bn - t161) <= timeToleranceBars;
 
 # ---------- Anchored VWAP ----------
-def barsSince = bn - lastSwingBar + 1;
-def cumPV = Sum(close * volume, barsSince);
-def cumV  = Sum(volume, barsSince);
+# Sum() requires a constant length in thinkScript, so the anchored sums are
+# accumulated recursively. A new anchor always confirms exactly 5 bars after
+# its pivot, so the window re-seeds with the last 6 bars.
+def newAnchor = lastSwingBar != lastSwingBar[1];
+def cumPV = if newAnchor then Sum(close * volume, 6) else cumPV[1] + close * volume;
+def cumV  = if newAnchor then Sum(volume, 6) else cumV[1] + volume;
 def avwap = if bn >= lastSwingBar and cumV != 0 then cumPV / cumV else na;
 def nearAVWAP = AbsValue(close - avwap) <= atr * 0.12;
 

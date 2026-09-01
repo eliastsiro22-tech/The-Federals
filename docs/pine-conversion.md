@@ -74,7 +74,7 @@ else
 avwap = cumV != 0 ? cumPV / cumV : na
 ```
 
-This also avoids thinkScript's practical limit where `Sum` over a very long dynamic window can misbehave far from the anchor.
+Field note: thinkScript's `Sum()` turns out to require a constant length outright — the original's dynamic-length calls fail to compile in thinkorswim, so `ForceOfNature.tos` now uses this same cumulative-reset construction (re-seeded with a constant 6-bar `Sum` when a new anchor confirms). Both platforms therefore run identical AVWAP math.
 
 ### 3. Implicit recursion → `var` + `:=`
 
