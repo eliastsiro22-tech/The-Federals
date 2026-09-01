@@ -1,236 +1,229 @@
-# The-Federals
-IndicatorFON
-# Force_of_Nature
-# Highest-probability Fib ratios only + Golden Pocket emphasis
-# + Fib Time/Cycles + Anchored VWAP + Fan proximity
-# + HTF Trend + Quality PA + Volume + RSI Extreme/Divergence
-# Rare, high-confidence signals only
+<div align="center">
 
-declare upper;
+# Force of Nature — IndicatorFON
 
-input showSignals           = yes;
-input confluenceThreshold   = 7.5;      # Weighted score threshold
-input tolerancePct          = 0.10;
-input timeToleranceBars     = 2;
-input minSwingATR           = 1.5;
-input requireVolume         = yes;
-input volumeMult            = 1.3;
-input requireHTFTrend       = yes;
-input htfAgg                = AggregationPeriod.DAY;
-input requireRSI            = yes;
-input rsiLength             = 14;
-input rsiOversold           = 40;
-input rsiOverbought         = 60;
-input showDashboard         = yes;
-input showAVWAP             = yes;
+**A multi-confluence Fibonacci signal engine for thinkorswim**
 
-def na = Double.NaN;
-def bn = BarNumber();
-def atr = Average(TrueRange(high, close, low), 14);
-def tol = atr * tolerancePct;
-def volAvg = Average(volume, 20);
+![Platform](https://img.shields.io/badge/platform-thinkorswim-2E7D32)
+![Language](https://img.shields.io/badge/language-thinkScript-1565C0)
+![Type](https://img.shields.io/badge/type-chart%20overlay%20study-6A1B9A)
+![Signals](https://img.shields.io/badge/signals-rare%20%C2%B7%20high%20conviction-B71C1C)
 
-# ---------- Improved Significant Swing Detection ----------
-script getSwingHigh {
-    input price = high;
-    input left = 5;
-    input right = 5;
-    input minSize = 0.0;
-    def isSwing = price[left] == Highest(price, left + right + 1) and
-                  (price[left] - Lowest(price, left + right + 1)) >= minSize;
-    plot out = if isSwing then price[left] else Double.NaN;
-}
+</div>
 
-script getSwingLow {
-    input price = low;
-    input left = 5;
-    input right = 5;
-    input minSize = 0.0;
-    def isSwing = price[left] == Lowest(price, left + right + 1) and
-                  (Highest(price, left + right + 1) - price[left]) >= minSize;
-    plot out = if isSwing then price[left] else Double.NaN;
-}
+Force of Nature is a chart study written in **thinkScript** for the thinkorswim platform. It is built around one idea: **a signal is only worth taking when many independent techniques agree at the same price, at the same time.** Instead of firing on any single indicator, it runs eight analysis stages in parallel and plots an arrow only when *every* gate passes — by design, signals are rare.
 
-def minSizeMain = atr * minSwingATR;
-def shMain = getSwingHigh(high, 5, 5, minSizeMain);
-def slMain = getSwingLow(low, 5, 5, minSizeMain);
+- **Source:** [`ForceOfNature.tos`](ForceOfNature.tos)
+- **Pine Script port feasibility:** [`docs/pine-conversion.md`](docs/pine-conversion.md)
 
-def lastSwingHighBar = if !IsNaN(shMain) then bn - 5 else lastSwingHighBar[1];
-def lastSwingLowBar  = if !IsNaN(slMain) then bn - 5 else lastSwingLowBar[1];
-def lastSwingHigh    = if !IsNaN(shMain) then shMain else lastSwingHigh[1];
-def lastSwingLow     = if !IsNaN(slMain) then slMain else lastSwingLow[1];
+---
 
-def lastSwingBar = Max(lastSwingHighBar, lastSwingLowBar);
-def prevSwingBar = Min(lastSwingHighBar, lastSwingLowBar);
-def isUpSwing    = lastSwingHighBar > lastSwingLowBar;
+## Signal pipeline
 
-# ---------- Key Higher Timeframe Swings ----------
-def hD  = high(period = AggregationPeriod.DAY);
-def lD  = low(period  = AggregationPeriod.DAY);
-def h4H = high(period = AggregationPeriod.FOUR_HOURS);
-def l4H = low(period  = AggregationPeriod.FOUR_HOURS);
-def h1H = high(period = AggregationPeriod.HOUR);
-def l1H = low(period  = AggregationPeriod.HOUR);
-def hW  = high(period = AggregationPeriod.WEEK);
-def lW  = low(period  = AggregationPeriod.WEEK);
+Every bar, the study evaluates eight independent gates. All of them must pass — on the same bar — for a signal to print.
 
-def shD  = HighestAll(getSwingHigh(hD,  3, 3, atr * 2.0));
-def slD  = LowestAll(getSwingLow(lD,   3, 3, atr * 2.0));
-def sh4H = HighestAll(getSwingHigh(h4H, 3, 3, atr * 1.5));
-def sl4H = LowestAll(getSwingLow(l4H,  3, 3, atr * 1.5));
-def sh1H = HighestAll(getSwingHigh(h1H, 3, 3, atr * 1.0));
-def sl1H = LowestAll(getSwingLow(l1H,  3, 3, atr * 1.0));
-def shW  = HighestAll(getSwingHigh(hW,  2, 2, atr * 3.0));
-def slW  = LowestAll(getSwingLow(lW,   2, 2, atr * 3.0));
+```mermaid
+flowchart LR
+    subgraph DATA["Market data"]
+        direction TB
+        OHLC["Chart OHLC + Volume"]
+        MTF["1H · 4H · Daily · Weekly series"]
+    end
 
-# ---------- Weighted Fib Score (Golden Pocket emphasis) ----------
-script fibScore {
-    input hi = 0.0;
-    input lo = 0.0;
-    input price = close;
-    input tol = 0.0;
+    subgraph GATES["Confluence gates — ALL must pass"]
+        direction TB
+        G1["1 · Swing structure<br/>ATR-filtered pivots"]
+        G2["2 · Fib price confluence<br/>weighted score ≥ 7.5"]
+        G3["3 · Fib time window<br/>bar within ±2 of projection"]
+        G4["4 · Anchored VWAP<br/>price within 0.12 × ATR"]
+        G5["5 · Fib fan<br/>price near 38.2 / 50 / 61.8 ray"]
+        G6["6 · Reversal price action<br/>strong close, ≥ 60% of range"]
+        G7["7 · Volume surge<br/>&gt; 1.3 × 20-bar average"]
+        G8["8 · RSI + HTF trend<br/>extreme/divergence + daily EMA"]
+    end
 
-    def range = hi - lo;
-    def f382  = lo + 0.382 * range;
-    def f50   = lo + 0.500 * range;
-    def f618  = lo + 0.618 * range;
-    def f65   = lo + 0.650 * range;
-    def f127  = hi + 0.272 * range;
-    def f161  = hi + 0.618 * range;
+    OHLC --> GATES
+    MTF --> GATES
+    GATES --> AND(("AND"))
+    AND -->|bullish side| BULL["▲ Bull signal — cyan arrow"]
+    AND -->|bearish side| BEAR["▼ Bear signal — magenta arrow"]
+```
 
-    def inGoldenPocket = price >= f618 and price <= f65;
+---
 
-    def s =
-        (if AbsValue(price - f618) <= tol or inGoldenPocket then 3.5 else 0.0) +
-        (if AbsValue(price - f50)  <= tol then 2.5 else 0.0) +
-        (if AbsValue(price - f382) <= tol then 2.0 else 0.0) +
-        (if AbsValue(price - f127) <= tol then 1.5 else 0.0) +
-        (if AbsValue(price - f161) <= tol then 1.5 else 0.0);
-    plot out = s;
-}
+## Stage-by-stage breakdown
 
-def scoreD     = fibScore(shD,  slD,  close, tol);
-def score4H    = fibScore(sh4H, sl4H, close, tol);
-def score1H    = fibScore(sh1H, sl1H, close, tol);
-def scoreW     = fibScore(shW,  slW,  close, tol);
-def scoreMain  = fibScore(lastSwingHigh, lastSwingLow, close, tol);
+### Stage 1 — Significant swing detection
 
-def priceConfluenceScore = scoreD + score4H + score1H + scoreW + scoreMain;
-def isPriceConfluence    = priceConfluenceScore >= confluenceThreshold;
+*Section `Improved Significant Swing Detection` in [`ForceOfNature.tos`](ForceOfNature.tos)*
 
-# ---------- Fib Time + Cycle Windows ----------
-def span = Max(lastSwingBar - prevSwingBar, 1);
-def t382 = lastSwingBar + Round(span * 0.382);
-def t500 = lastSwingBar + Round(span * 0.500);
-def t618 = lastSwingBar + Round(span * 0.618);
-def t100 = lastSwingBar + span;
-def t161 = lastSwingBar + Round(span * 1.618);
+Two helper scripts (`getSwingHigh` / `getSwingLow`) find fractal pivots: a bar whose high (or low) is the extreme of an 11-bar window (5 left, 5 right). A pivot only counts if the swing spans at least **1.5 × ATR** (`minSwingATR`), which filters out noise. The study then tracks, recursively:
 
-def isTimeWindow =
-    AbsValue(bn - t382) <= timeToleranceBars or
-    AbsValue(bn - t500) <= timeToleranceBars or
-    AbsValue(bn - t618) <= timeToleranceBars or
-    AbsValue(bn - t100) <= timeToleranceBars or
-    AbsValue(bn - t161) <= timeToleranceBars;
+| Variable | Meaning |
+|---|---|
+| `lastSwingHigh` / `lastSwingLow` | Price of the most recent confirmed swing high / low |
+| `lastSwingBar` / `prevSwingBar` | Bar numbers of the newest and older of the two swings |
+| `isUpSwing` | `true` when the swing high is more recent than the swing low |
 
-# ---------- Anchored VWAP ----------
-def barsSince = bn - lastSwingBar + 1;
-def cumPV = Sum(close * volume, barsSince);
-def cumV  = Sum(volume, barsSince);
-def avwap = if bn >= lastSwingBar and cumV != 0 then cumPV / cumV else na;
-def nearAVWAP = AbsValue(close - avwap) <= atr * 0.12;
+These anchors feed almost every later stage — the Fib grid, the time windows, the anchored VWAP, and the fan.
 
-# ---------- Fibonacci Fan Proximity ----------
-def fanRange = lastSwingHigh - lastSwingLow;
-def fanSlope = fanRange / span;
+> Note: because a pivot needs 5 right-side bars to confirm, every swing is recognized **5 bars after the fact**. This is inherent to fractal pivots, not a flaw.
 
-def fan382 = if isUpSwing then lastSwingLow + fanSlope * 0.382 * (bn - lastSwingLowBar)
-                          else lastSwingHigh - fanSlope * 0.382 * (bn - lastSwingHighBar);
-def fan50  = if isUpSwing then lastSwingLow + fanSlope * 0.500 * (bn - lastSwingLowBar)
-                          else lastSwingHigh - fanSlope * 0.500 * (bn - lastSwingHighBar);
-def fan618 = if isUpSwing then lastSwingLow + fanSlope * 0.618 * (bn - lastSwingLowBar)
-                          else lastSwingHigh - fanSlope * 0.618 * (bn - lastSwingHighBar);
+### Stage 2 — Multi-timeframe Fibonacci price confluence
 
-def nearFan = AbsValue(close - fan382) <= tol or
-              AbsValue(close - fan50)  <= tol or
-              AbsValue(close - fan618) <= tol;
+*Sections `Key Higher Timeframe Swings` and `Weighted Fib Score`*
 
-# ---------- HTF Trend Filter ----------
-def htfClose = close(period = htfAgg);
-def htfEMA   = ExpAverage(htfClose, 21);
-def htfTrendUp   = htfClose > htfEMA;
-def htfTrendDown = htfClose < htfEMA;
+Swing highs/lows are extracted from **four higher timeframes** (1H, 4H, Daily, Weekly via `HighestAll`/`LowestAll`) plus the chart's own swing pair — five Fibonacci grids in total. Each grid is scored by the `fibScore` function: price sitting within tolerance (`ATR × 0.10`) of a level earns weighted points.
 
-# ---------- Quality Price Action + Volume ----------
-def bullPA = low < low[1] and close > open and close > close[1] and
-             (close - low) > 0.60 * (high - low);
-def bearPA = high > high[1] and close < open and close < close[1] and
-             (high - close) > 0.60 * (high - low);
+```text
+              ── 1.618 extension ─────────────   +1.5
+              ── 1.272 extension ─────────────   +1.5
+  swing high ═══════════════════════════════ 1.000
+              ── 0.650 ─┐
+                        ├─ GOLDEN POCKET ───    +3.5   ← heaviest weight
+              ── 0.618 ─┘
+              ── 0.500 ────────────────────      +2.5
+              ── 0.382 ────────────────────      +2.0
+  swing low  ═══════════════════════════════ 0.000
+```
 
-def volOK = !requireVolume or volume > volAvg * volumeMult;
+The five grid scores are summed into `priceConfluenceScore`. The gate passes when the total reaches **`confluenceThreshold` (default 7.5)** — which forces price to be sitting on meaningful Fib levels across *multiple* timeframes simultaneously, with strong bias toward the 0.618–0.650 Golden Pocket.
 
-# ---------- RSI Extreme + Simple Regular Divergence ----------
-def rsi = RSI(length = rsiLength);
+```mermaid
+flowchart TD
+    W["Weekly swing grid"] --> S["fibScore × 5"]
+    D["Daily swing grid"] --> S
+    H4["4-hour swing grid"] --> S
+    H1["1-hour swing grid"] --> S
+    C["Chart swing grid"] --> S
+    S --> SUM["Σ priceConfluenceScore"]
+    SUM --> TH{"≥ 7.5 ?"}
+    TH -->|yes| PASS["Gate passes"]
+    TH -->|no| FAIL["No signal possible"]
+```
 
-def rsiExtremeBull = rsi <= rsiOversold;
-def rsiExtremeBear = rsi >= rsiOverbought;
+### Stage 3 — Fibonacci time / cycle windows
 
-def priceLL = low < lowest(low[1], 6);
-def rsiHL   = rsi > highest(rsi[1], 6);
-def bullDiv = priceLL and rsiHL;
+*Section `Fib Time + Cycle Windows`*
 
-def priceHH = high > highest(high[1], 6);
-def rsiLH   = rsi < lowest(rsi[1], 6);
-def bearDiv = priceHH and rsiLH;
+Fibonacci is applied to the **time axis**. The duration of the last completed swing (`span`, in bars) is projected forward from the most recent swing point at ratios **0.382 · 0.500 · 0.618 · 1.000 · 1.618**. The current bar must land within **±`timeToleranceBars` (2)** of one of those projected bars. The premise: reversals cluster at Fib-proportional time intervals of the prior swing.
 
-def rsiBullOK = !requireRSI or rsiExtremeBull or bullDiv;
-def rsiBearOK = !requireRSI or rsiExtremeBear or bearDiv;
+### Stage 4 — Anchored VWAP magnet
 
-# ---------- FULL HIGH-CONVICTION CONFLUENCE ----------
-def bullConfluence =
-    isPriceConfluence and
-    isTimeWindow and
-    nearAVWAP and
-    nearFan and
-    bullPA and
-    volOK and
-    rsiBullOK and
-    (!requireHTFTrend or htfTrendUp);
+*Section `Anchored VWAP`*
 
-def bearConfluence =
-    isPriceConfluence and
-    isTimeWindow and
-    nearAVWAP and
-    nearFan and
-    bearPA and
-    volOK and
-    rsiBearOK and
-    (!requireHTFTrend or htfTrendDown);
+A volume-weighted average price is anchored at the last swing point (`Sum(close × volume) / Sum(volume)` since the anchor). Institutions commonly anchor VWAP at significant pivots, making it a magnet/defense level. The gate requires price within **0.12 × ATR** of the AVWAP — a deliberately tight band. The AVWAP is also drawn on the chart as a dashed yellow line.
 
-# ---------- Signals ----------
-plot BullSignal = if showSignals and bullConfluence then low - atr * 0.45 else na;
-BullSignal.SetPaintingStrategy(PaintingStrategy.ARROW_UP);
-BullSignal.SetDefaultColor(Color.CYAN);
-BullSignal.SetLineWeight(4);
+### Stage 5 — Fibonacci fan proximity
 
-plot BearSignal = if showSignals and bearConfluence then high + atr * 0.45 else na;
-BearSignal.SetPaintingStrategy(PaintingStrategy.ARROW_DOWN);
-BearSignal.SetDefaultColor(Color.MAGENTA);
-BearSignal.SetLineWeight(4);
+*Section `Fibonacci Fan Proximity`*
 
-# ---------- Anchored VWAP Line ----------
-plot AVWAPLine = if showAVWAP then avwap else na;
-AVWAPLine.SetDefaultColor(Color.YELLOW);
-AVWAPLine.SetStyle(Curve.SHORT_DASH);
-AVWAPLine.SetLineWeight(2);
+Diagonal rays are projected from the last swing at **38.2% / 50% / 61.8%** of the swing's slope — rising fans from a swing low in up-swings, falling fans from a swing high in down-swings. Price must be within tolerance (`ATR × 0.10`) of one ray. This adds a *trend-geometry* dimension: price is not just at a horizontal Fib level, but also on a Fib-proportional trendline.
 
-# ---------- Dashboard ----------
-AddLabel(showDashboard,
-    "Score: " + Round(priceConfluenceScore, 1) +
-    " | Time: " + (if isTimeWindow then "✓" else "×") +
-    " | AVWAP: " + (if nearAVWAP then "✓" else "×") +
-    " | Fan: " + (if nearFan then "✓" else "×") +
-    " | RSI: " + (if (bullConfluence or bearConfluence) then "✓" else if rsiBullOK or rsiBearOK then "·" else "×") +
-    " | HTF: " + (if htfTrendUp then "▲" else if htfTrendDown then "▼" else "─"),
-    if bullConfluence or bearConfluence then Color.GREEN else Color.GRAY
-);
+### Stage 6 — Quality price action (trigger bar)
+
+*Section `Quality Price Action + Volume`*
+
+This is the entry trigger — the bar itself must show rejection:
+
+| Side | Requirements |
+|---|---|
+| **Bull** | New low below prior bar's low **and** close above open **and** close above prior close **and** close in the **top 60%** of the bar's range |
+| **Bear** | New high above prior bar's high **and** close below open **and** close below prior close **and** close in the **bottom 60%** of the bar's range |
+
+In candlestick terms: a hammer-style sweep-and-reclaim for longs, a shooting-star-style sweep-and-reject for shorts.
+
+### Stage 7 — Volume confirmation
+
+*Section `Quality Price Action + Volume`*
+
+Bar volume must exceed **1.3 × the 20-bar average** (`volumeMult`), confirming real participation behind the reversal bar. Can be disabled with `requireVolume = no`.
+
+### Stage 8 — RSI condition + higher-timeframe trend
+
+*Sections `RSI Extreme + Simple Regular Divergence` and `HTF Trend Filter`*
+
+Two momentum/trend gates, both individually toggleable:
+
+- **RSI (14):** must be at an extreme — **≤ 40** for longs, **≥ 60** for shorts — *or* show the script's divergence pattern (see [caveats](#known-caveats--design-notes)).
+- **HTF trend:** the daily close (aggregation configurable via `htfAgg`) must be above its **21 EMA** for longs, below for shorts. This keeps counter-trend signals off the chart.
+
+---
+
+## Chart output
+
+| Element | Appearance | Meaning |
+|---|---|---|
+| `BullSignal` | Cyan up-arrow below the bar (weight 4) | All eight gates passed on the bullish side |
+| `BearSignal` | Magenta down-arrow above the bar (weight 4) | All eight gates passed on the bearish side |
+| `AVWAPLine` | Yellow short-dash line | VWAP anchored at the last swing point |
+| Dashboard label | Top-left corner label | Live status of each gate (below) |
+
+### Dashboard legend
+
+```text
+Score: 8.5 | Time: ✓ | AVWAP: ✓ | Fan: ✓ | RSI: · | HTF: ▲
+```
+
+| Field | Values | Meaning |
+|---|---|---|
+| `Score` | number | Current summed Fib confluence score (gate needs ≥ 7.5) |
+| `Time` | ✓ / × | Inside a Fib time window |
+| `AVWAP` | ✓ / × | Price within the AVWAP band |
+| `Fan` | ✓ / × | Price near a fan ray |
+| `RSI` | ✓ / · / × | ✓ full signal · RSI condition met alone × not met |
+| `HTF` | ▲ / ▼ / ─ | Daily trend up / down / flat |
+
+The label turns **green** when a full signal is active, otherwise stays gray.
+
+---
+
+## Inputs reference
+
+| Input | Default | Description |
+|---|---|---|
+| `showSignals` | `yes` | Master toggle for the arrows |
+| `confluenceThreshold` | `7.5` | Minimum summed Fib score (Stage 2 gate) |
+| `tolerancePct` | `0.10` | Level-proximity tolerance as a **multiple of ATR** (despite the name, not a percent of price) |
+| `timeToleranceBars` | `2` | ± bars around each Fib time projection |
+| `minSwingATR` | `1.5` | Minimum swing size in ATRs for a valid chart pivot |
+| `requireVolume` | `yes` | Enforce the volume gate |
+| `volumeMult` | `1.3` | Volume must exceed this × 20-bar average |
+| `requireHTFTrend` | `yes` | Enforce the higher-timeframe trend gate |
+| `htfAgg` | `DAY` | Aggregation for the trend filter EMA |
+| `requireRSI` | `yes` | Enforce the RSI gate |
+| `rsiLength` | `14` | RSI period |
+| `rsiOversold` | `40` | RSI extreme threshold for longs |
+| `rsiOverbought` | `60` | RSI extreme threshold for shorts |
+| `showDashboard` | `yes` | Show the status label |
+| `showAVWAP` | `yes` | Draw the anchored VWAP line |
+
+---
+
+## Installation (thinkorswim)
+
+1. Open thinkorswim → **Charts** → **Studies** → **Edit Studies…**
+2. Click **Create…** in the lower-left of the Studies dialog.
+3. Delete the placeholder code and paste the full contents of [`ForceOfNature.tos`](ForceOfNature.tos).
+4. Name the study (e.g. `ForceOfNature`), click **OK**, then **Apply**.
+5. Best used on intraday charts (5m–1H) so the 1H/4H/D/W confluence layers are all meaningful.
+
+---
+
+## Known caveats / design notes
+
+- **Signals are rare by design.** With all gates enabled at defaults, most sessions will print nothing. Loosen `confluenceThreshold`, tolerance, or disable gates to increase frequency (at the cost of selectivity).
+- **Divergence logic is stricter than textbook divergence.** `bullDiv` requires price at a 6-bar *lower low* while RSI makes a 6-bar *higher high* (textbook bullish divergence compares RSI *lows*). In practice the RSI gate almost always passes via the extreme condition, not divergence.
+- **`HighestAll`/`LowestAll` scan the whole loaded chart** — including bars to the right of a historical bar. Higher-timeframe swing levels therefore use information a live trader would not have had, so historical signals can look better than live ones (lookahead / repaint bias). Live-edge behavior is unaffected.
+- **Chart-timeframe ATR sizes the HTF swings.** The weekly/daily pivot filters use the chart's ATR, so the effective strictness of Stage 2 changes with the chart timeframe you load.
+- **`tolerancePct` is an ATR multiple**, not a percentage of price — keep that in mind when tuning.
+- The `fibScore` function is direction-agnostic (pure proximity); trade direction comes entirely from the price-action, RSI, and trend gates.
+- This is an **analysis tool, not financial advice**. Backtest and paper-trade before risking capital.
+
+---
+
+## TradingView / Pine Script port
+
+A full feasibility analysis lives in [`docs/pine-conversion.md`](docs/pine-conversion.md).
+
+**Short version: yes — the study is fully portable to Pine Script v6** (~200 lines). Roughly 90% of the code maps one-to-one (pivots, MTF data, RSI/EMA, plotting, dashboard). Three areas need redesign rather than translation: the `HighestAll` whole-chart scans (no Pine equivalent — replaced by running pivot tracking, which also *removes* the lookahead bias), the dynamic-length `Sum` used by the anchored VWAP (replaced by the idiomatic cumulative-reset pattern), and thinkScript's implicit recursion (replaced by `var` variables). Expect historical signals to differ from thinkorswim precisely because the port would be *more* honest about what was knowable in real time.
