@@ -30,6 +30,7 @@ toleranceATR        = input.float(0.15, "Level tolerance floor (ATR multiple)", 
 toleranceRangePct   = input.float(0.02, "Level tolerance (fraction of grid range)", minval = 0, step = 0.005)
 avwapBandATR        = input.float(0.25, "AVWAP band (ATR multiple)", minval = 0, step = 0.01)
 minContextGates     = input.int(2,      "Context gates required (time/AVWAP/fan)", minval = 0, maxval = 3)
+cooldownBars        = input.int(10,     "Signal cooldown (bars)", minval = 0)
 timeToleranceBars   = input.int(2,      "Time window tolerance (bars)", minval = 0)
 minSwingATR         = input.float(1.5,  "Min chart swing size (ATR multiple)", minval = 0, step = 0.1)
 lookback1H          = input.int(24,     "1H grid lookback (hourly bars)", minval = 2)
@@ -78,19 +79,29 @@ inTimeWindow(float t, float tolBars) =>
 fibScore(float hi, float lo, float price, float tolerance) =>
     float s = 0.0
     if not na(hi) and not na(lo)
-        rng  = hi - lo
-        f382 = lo + 0.382 * rng
-        f50  = lo + 0.500 * rng
-        f618 = lo + 0.618 * rng
-        f65  = lo + 0.650 * rng
-        f127 = hi + 0.272 * rng
-        f161 = hi + 0.618 * rng
+        rng   = hi - lo
+        f35   = lo + 0.350 * rng
+        f382  = lo + 0.382 * rng
+        f50   = lo + 0.500 * rng
+        f618  = lo + 0.618 * rng
+        f65   = lo + 0.650 * rng
+        f127u = hi + 0.272 * rng
+        f161u = hi + 0.618 * rng
+        f127d = lo - 0.272 * rng
+        f161d = lo - 0.618 * rng
+        // golden pocket (0.618-0.65 up from the low) and its bearish mirror
+        // (0.35-0.382, the same pocket measured down from the high) score
+        // equally, so short setups are not structurally under-weighted;
+        // extensions exist on both sides of the range
         inGoldenPocket = price >= f618 and price <= f65
+        inBearPocket   = price >= f35 and price <= f382
         s += (math.abs(price - f618) <= tolerance or inGoldenPocket) ? 3.5 : 0.0
-        s += math.abs(price - f50)  <= tolerance ? 2.5 : 0.0
-        s += math.abs(price - f382) <= tolerance ? 2.0 : 0.0
-        s += math.abs(price - f127) <= tolerance ? 1.5 : 0.0
-        s += math.abs(price - f161) <= tolerance ? 1.5 : 0.0
+        s += (math.abs(price - f382) <= tolerance or inBearPocket) ? 3.5 : 0.0
+        s += math.abs(price - f50)   <= tolerance ? 2.5 : 0.0
+        s += math.abs(price - f127u) <= tolerance ? 1.5 : 0.0
+        s += math.abs(price - f161u) <= tolerance ? 1.5 : 0.0
+        s += math.abs(price - f127d) <= tolerance ? 1.5 : 0.0
+        s += math.abs(price - f161d) <= tolerance ? 1.5 : 0.0
     s
 
 // ---------- Significant Swing Detection (chart timeframe) ----------
@@ -102,13 +113,24 @@ var float lastSwingHigh    = na
 var float lastSwingLow     = na
 var int   lastSwingHighBar = na
 var int   lastSwingLowBar  = na
+var int   swingDir         = 0
 
-if not na(shMain)
+// alternate swings so the tracked high/low pair is always one real leg: an
+// opposite-side pivot starts a new leg; a same-side pivot only counts if it
+// is more extreme than the current leg extreme
+acceptHi = not na(shMain) and (swingDir != 1 or shMain >= nz(lastSwingHigh, shMain))
+acceptLo = not na(slMain) and (swingDir != -1 or slMain <= nz(lastSwingLow, slMain))
+
+if acceptHi
     lastSwingHigh    := shMain
     lastSwingHighBar := bar_index - 5
-if not na(slMain)
+if acceptLo
     lastSwingLow    := slMain
     lastSwingLowBar := bar_index - 5
+if acceptHi and not acceptLo
+    swingDir := 1
+else if acceptLo and not acceptHi
+    swingDir := -1
 
 swingsReady  = not na(lastSwingHighBar) and not na(lastSwingLowBar)
 lastSwingBar = swingsReady ? math.max(lastSwingHighBar, lastSwingLowBar) : na
@@ -280,11 +302,19 @@ bearGates = contextOK and bearPA and volOK and
 bullConfluence = bullGates and isPriceConfluence
 bearConfluence = bearGates and isPriceConfluence
 
+// suppress signal clusters: once a signal fires, stand down for N bars
+var int lastSigBar = -1000000
+canFire = bar_index - lastSigBar > cooldownBars
+bullSig = bullConfluence and canFire
+bearSig = bearConfluence and canFire
+if bullSig or bearSig
+    lastSigBar := bar_index
+
 // ---------- Diagnostics (status line + data window, nothing on the pane) ----------
 // hover any bar with the Data Window open to see which gates pass (1) or fail (0)
 plot(priceConfluenceScore, "Score", color.gray, display = display.status_line + display.data_window)
-plot(bullConfluence ? 1 : 0, "Bull now", color.aqua, display = display.status_line + display.data_window)
-plot(bearConfluence ? 1 : 0, "Bear now", color.fuchsia, display = display.status_line + display.data_window)
+plot(bullSig ? 1 : 0, "Bull now", color.aqua, display = display.status_line + display.data_window)
+plot(bearSig ? 1 : 0, "Bear now", color.fuchsia, display = display.status_line + display.data_window)
 plot(isTimeWindow ? 1 : 0, "Gate: time window", display = display.data_window)
 plot(nearAVWAP ? 1 : 0, "Gate: AVWAP", display = display.data_window)
 plot(nearFan ? 1 : 0, "Gate: fan", display = display.data_window)
@@ -303,11 +333,11 @@ plot(scoreW, "Score: weekly grid", display = display.data_window)
 
 // ---------- Signals ----------
 // (display.pane — the status line already shows "Bull now"/"Bear now")
-plotshape(showSignals and bullConfluence, "Bull signal", shape.triangleup, location.belowbar, color.new(color.aqua, 0), size = size.small, display = display.pane)
-plotshape(showSignals and bearConfluence, "Bear signal", shape.triangledown, location.abovebar, color.new(color.fuchsia, 0), size = size.small, display = display.pane)
+plotshape(showSignals and bullSig, "Bull signal", shape.triangleup, location.belowbar, color.new(color.aqua, 0), size = size.small, display = display.pane)
+plotshape(showSignals and bearSig, "Bear signal", shape.triangledown, location.abovebar, color.new(color.fuchsia, 0), size = size.small, display = display.pane)
 
-alertcondition(bullConfluence, "FON Bull", "Force of Nature: bullish confluence on {{ticker}} {{interval}}")
-alertcondition(bearConfluence, "FON Bear", "Force of Nature: bearish confluence on {{ticker}} {{interval}}")
+alertcondition(bullSig, "FON Bull", "Force of Nature: bullish confluence on {{ticker}} {{interval}}")
+alertcondition(bearSig, "FON Bear", "Force of Nature: bearish confluence on {{ticker}} {{interval}}")
 
 // ---------- Anchored VWAP Line ----------
 plot(showAVWAP ? avwap : na, "AVWAP", color.new(color.yellow, 0), 2, plot.style_linebr)

@@ -2,152 +2,125 @@
 
 # Force of Nature — IndicatorFON
 
-**A multi-confluence Fibonacci signal engine for thinkorswim**
+**A multi-confluence Fibonacci signal engine for thinkorswim and TradingView**
 
-![Platform](https://img.shields.io/badge/platform-thinkorswim-2E7D32)
-![Language](https://img.shields.io/badge/language-thinkScript-1565C0)
+![Platform](https://img.shields.io/badge/platform-thinkorswim%20%2B%20TradingView-2E7D32)
+![Language](https://img.shields.io/badge/language-thinkScript%20%2B%20Pine%20v6-1565C0)
 ![Type](https://img.shields.io/badge/type-chart%20overlay%20study-6A1B9A)
 ![Signals](https://img.shields.io/badge/signals-rare%20%C2%B7%20high%20conviction-B71C1C)
 
 </div>
 
-Force of Nature is a chart study written in **thinkScript** for the thinkorswim platform. It is built around one idea: **a signal is only worth taking when many independent techniques agree at the same price, at the same time.** Instead of firing on any single indicator, it runs eight analysis stages in parallel and plots an arrow only when *every* gate passes — by design, signals are rare.
+Force of Nature is a chart study built around one idea: **a signal is only worth taking when many independent techniques agree at the same price, at the same time.** It scores Fibonacci confluence across five timeframes and demands a reversal bar, volume, momentum, and trend alignment before printing an arrow — by design, signals are rare.
 
-- **thinkorswim source:** [`ForceOfNature.tos`](ForceOfNature.tos)
-- **TradingView source (Pine v6):** [`ForceOfNature.pine`](ForceOfNature.pine)
-- **Port analysis:** [`docs/pine-conversion.md`](docs/pine-conversion.md)
+Both platform versions are maintained in lockstep and run identical logic:
+
+- **thinkorswim:** [`ForceOfNature.tos`](ForceOfNature.tos)
+- **TradingView (Pine v6):** [`ForceOfNature.pine`](ForceOfNature.pine)
+- **Design / port history:** [`docs/pine-conversion.md`](docs/pine-conversion.md)
+
+> This is a redesigned descendant of the original script: several genuine bugs were fixed (a non-compiling `Sum()`, NaN score poisoning, inverted divergence logic, a pseudo-EMA trend filter) and the Fibonacci grids were re-anchored so signals no longer repaint or depend on how much chart history is loaded. The full change history is in the git log; design rationale is in the [docs](docs/pine-conversion.md).
 
 ---
 
 ## Signal pipeline
-
-Every bar, the study evaluates eight independent gates. All of them must pass — on the same bar — for a signal to print.
 
 ```mermaid
 flowchart LR
     subgraph DATA["Market data"]
         direction TB
         OHLC["Chart OHLC + Volume"]
-        MTF["1H · 4H · Daily · Weekly series"]
+        MTF["1H · 4H · Daily · Weekly ranges"]
     end
 
-    subgraph GATES["Confluence gates — ALL must pass"]
+    subgraph HARD["Hard gates — all must pass"]
         direction TB
-        G1["1 · Swing structure<br/>ATR-filtered pivots"]
-        G2["2 · Fib price confluence<br/>weighted score ≥ 7.5"]
-        G3["3 · Fib time window<br/>bar within ±2 of projection"]
-        G4["4 · Anchored VWAP<br/>price within 0.12 × ATR"]
-        G5["5 · Fib fan<br/>price near 38.2 / 50 / 61.8 ray"]
-        G6["6 · Reversal price action<br/>strong close, ≥ 60% of range"]
-        G7["7 · Volume surge<br/>&gt; 1.3 × 20-bar average"]
-        G8["8 · RSI + HTF trend<br/>extreme/divergence + daily EMA"]
+        G1["Fib confluence score ≥ 7.5<br/>across 5 timeframe grids"]
+        G2["Reversal price action<br/>sweep + strong close"]
+        G3["Volume surge<br/>&gt; 1.3 × 20-bar average"]
+        G4["RSI extreme or<br/>swing-to-swing divergence"]
+        G5["HTF trend alignment<br/>daily 21 EMA"]
     end
 
-    OHLC --> GATES
-    MTF --> GATES
-    GATES --> AND(("AND"))
-    AND -->|bullish side| BULL["▲ Bull signal — cyan arrow"]
-    AND -->|bearish side| BEAR["▼ Bear signal — magenta arrow"]
+    subgraph CTX["Context votes — 2 of 3"]
+        direction TB
+        C1["Fib time window"]
+        C2["Anchored VWAP band"]
+        C3["Fib fan ray"]
+    end
+
+    OHLC --> HARD
+    MTF --> HARD
+    OHLC --> CTX
+    HARD --> AND(("AND"))
+    CTX --> AND
+    AND --> CD["Cooldown ≥ 10 bars"]
+    CD -->|bullish side| BULL["▲ Bull signal — cyan"]
+    CD -->|bearish side| BEAR["▼ Bear signal — magenta"]
 ```
 
 ---
 
 ## Stage-by-stage breakdown
 
-### Stage 1 — Significant swing detection
+### Stage 1 — Swing detection (chart timeframe)
 
-*Section `Improved Significant Swing Detection` in [`ForceOfNature.tos`](ForceOfNature.tos)*
+Fractal pivots (5 bars each side, 1.5×ATR minimum size) with **enforced alternation**: an opposite-side pivot starts a new leg; a same-side pivot only counts if it's more extreme than the current leg extreme. The tracked high/low pair is therefore always one real leg — the anchor for the chart grid, time windows, AVWAP, and fan. Pivots confirm 5 bars after the fact; that lag is inherent to fractal detection.
 
-Two helper scripts (`getSwingHigh` / `getSwingLow`) find fractal pivots: a bar whose high (or low) is the extreme of an 11-bar window (5 left, 5 right). A pivot only counts if the swing spans at least **1.5 × ATR** (`minSwingATR`), which filters out noise. The study then tracks, recursively:
+### Stage 2 — Multi-timeframe Fibonacci confluence (hard gate)
 
-| Variable | Meaning |
-|---|---|
-| `lastSwingHigh` / `lastSwingLow` | Price of the most recent confirmed swing high / low |
-| `lastSwingBar` / `prevSwingBar` | Bar numbers of the newest and older of the two swings |
-| `isUpSwing` | `true` when the swing high is more recent than the swing low |
-
-These anchors feed almost every later stage — the Fib grid, the time windows, the anchored VWAP, and the fan.
-
-> Note: because a pivot needs 5 right-side bars to confirm, every swing is recognized **5 bars after the fact**. This is inherent to fractal pivots, not a flaw.
-
-### Stage 2 — Multi-timeframe Fibonacci price confluence
-
-*Sections `Key Higher Timeframe Swings` and `Weighted Fib Score`*
-
-Swing highs/lows are extracted from **four higher timeframes** (1H, 4H, Daily, Weekly via `HighestAll`/`LowestAll`) plus the chart's own swing pair — five Fibonacci grids in total. Each grid is scored by the `fibScore` function: price sitting within tolerance (`ATR × 0.10`) of a level earns weighted points.
+Each timeframe's grid is anchored to its **recent trading range** — the last N bars of that timeframe (defaults: 24×1H, 30×4H, 20 days, 13 weeks) — so the five grids are genuinely distinct, independent of loaded chart history, and non-repainting. Price near a level earns weighted points per grid:
 
 ```text
-              ── 1.618 extension ─────────────   +1.5
-              ── 1.272 extension ─────────────   +1.5
-  swing high ═══════════════════════════════ 1.000
+              ── 1.618 extension ───────────   +1.5
+              ── 1.272 extension ───────────   +1.5
+  range high ═══════════════════════════ 1.000
               ── 0.650 ─┐
-                        ├─ GOLDEN POCKET ───    +3.5   ← heaviest weight
+                        ├─ GOLDEN POCKET ──    +3.5
               ── 0.618 ─┘
-              ── 0.500 ────────────────────      +2.5
-              ── 0.382 ────────────────────      +2.0
-  swing low  ═══════════════════════════════ 0.000
+              ── 0.500 ──────────────────      +2.5
+              ── 0.382 ─┐
+                        ├─ BEAR POCKET ────    +3.5
+              ── 0.350 ─┘
+  range low  ═══════════════════════════ 0.000
+              ── 1.272 extension (down) ──     +1.5
+              ── 1.618 extension (down) ──     +1.5
 ```
 
-The five grid scores are summed into `priceConfluenceScore`. The gate passes when the total reaches **`confluenceThreshold` (default 7.5)** — which forces price to be sitting on meaningful Fib levels across *multiple* timeframes simultaneously, with strong bias toward the 0.618–0.650 Golden Pocket.
+The golden pocket and its bearish mirror score equally, so short setups are not structurally under-weighted. Each level's tolerance band has an ATR floor (0.15×) and widens with the grid's range (2%) — a weekly level gets a wider band than a 1-hour level. The summed score must reach **`confluenceThreshold` (7.5)**, which requires real agreement across multiple timeframes.
 
-```mermaid
-flowchart TD
-    W["Weekly swing grid"] --> S["fibScore × 5"]
-    D["Daily swing grid"] --> S
-    H4["4-hour swing grid"] --> S
-    H1["1-hour swing grid"] --> S
-    C["Chart swing grid"] --> S
-    S --> SUM["Σ priceConfluenceScore"]
-    SUM --> TH{"≥ 7.5 ?"}
-    TH -->|yes| PASS["Gate passes"]
-    TH -->|no| FAIL["No signal possible"]
-```
+### Stage 3 — Context votes: time, AVWAP, fan (2 of 3 required)
 
-### Stage 3 — Fibonacci time / cycle windows
+Three location/timing conditions vote instead of all being mandatory — the old triple-AND of narrow bands made live signals practically impossible:
 
-*Section `Fib Time + Cycle Windows`*
+- **Fib time window:** the last leg's duration projected forward at 0.382/0.5/0.618/1.0/1.618; the bar must land within a window that scales with leg length (5% of span). Requires a real leg (span ≥ 8 bars).
+- **Anchored VWAP:** volume-weighted average price anchored at the last swing; price within 0.25×ATR.
+- **Fib fan:** rays from the last swing at 38.2/50/61.8% of the leg's slope; price within the chart grid's tolerance.
 
-Fibonacci is applied to the **time axis**. The duration of the last completed swing (`span`, in bars) is projected forward from the most recent swing point at ratios **0.382 · 0.500 · 0.618 · 1.000 · 1.618**. The current bar must land within **±`timeToleranceBars` (2)** of one of those projected bars. The premise: reversals cluster at Fib-proportional time intervals of the prior swing.
-
-### Stage 4 — Anchored VWAP magnet
-
-*Section `Anchored VWAP`*
-
-A volume-weighted average price is anchored at the last swing point (`Sum(close × volume) / Sum(volume)` since the anchor). Institutions commonly anchor VWAP at significant pivots, making it a magnet/defense level. The gate requires price within **0.12 × ATR** of the AVWAP — a deliberately tight band. The AVWAP is also drawn on the chart as a dashed yellow line.
-
-### Stage 5 — Fibonacci fan proximity
-
-*Section `Fibonacci Fan Proximity`*
-
-Diagonal rays are projected from the last swing at **38.2% / 50% / 61.8%** of the swing's slope — rising fans from a swing low in up-swings, falling fans from a swing high in down-swings. Price must be within tolerance (`ATR × 0.10`) of one ray. This adds a *trend-geometry* dimension: price is not just at a horizontal Fib level, but also on a Fib-proportional trendline.
-
-### Stage 6 — Quality price action (trigger bar)
-
-*Section `Quality Price Action + Volume`*
-
-This is the entry trigger — the bar itself must show rejection:
+### Stage 4 — Reversal price action (hard gate)
 
 | Side | Requirements |
 |---|---|
-| **Bull** | New low below prior bar's low **and** close above open **and** close above prior close **and** close in the **top 60%** of the bar's range |
-| **Bear** | New high above prior bar's high **and** close below open **and** close below prior close **and** close in the **bottom 60%** of the bar's range |
+| **Bull** | New low below prior bar **and** close above open **and** close above prior close **and** close in the **top 40%** of the bar's range |
+| **Bear** | New high above prior bar **and** close below open **and** close below prior close **and** close in the **bottom 40%** of the bar's range |
 
-In candlestick terms: a hammer-style sweep-and-reclaim for longs, a shooting-star-style sweep-and-reject for shorts.
+A sweep-and-reclaim hammer for longs; a sweep-and-reject shooting star for shorts.
 
-### Stage 7 — Volume confirmation
+### Stage 5 — Volume surge (hard gate, toggleable)
 
-*Section `Quality Price Action + Volume`*
+Bar volume above **1.3× the 20-bar average**. Note that extended-hours bars distort the average — keep the extended-hours setting consistent when comparing platforms.
 
-Bar volume must exceed **1.3 × the 20-bar average** (`volumeMult`), confirming real participation behind the reversal bar. Can be disabled with `requireVolume = no`.
+### Stage 6 — RSI extreme or divergence (hard gate, toggleable)
 
-### Stage 8 — RSI condition + higher-timeframe trend
+RSI(14) at an extreme (≤40 for longs, ≥60 for shorts), **or** a regular divergence measured swing-to-swing: price sets a lower low across the two most recent swing lows while RSI at those same pivots sets a higher low (mirrored for bearish).
 
-*Sections `RSI Extreme + Simple Regular Divergence` and `HTF Trend Filter`*
+### Stage 7 — Higher-timeframe trend (hard gate, toggleable)
 
-Two momentum/trend gates, both individually toggleable:
+A **true 21-period EMA of the configured higher timeframe** (daily by default), computed on that timeframe's own bars. Longs only above it, shorts only below.
 
-- **RSI (14):** must be at an extreme — **≤ 40** for longs, **≥ 60** for shorts — *or* show the script's divergence pattern (see [caveats](#known-caveats--design-notes)).
-- **HTF trend:** the daily close (aggregation configurable via `htfAgg`) must be above its **21 EMA** for longs, below for shorts. This keeps counter-trend signals off the chart.
+### Stage 8 — Cooldown
+
+After any signal, the study stands down for **10 bars** (input), so one setup produces one arrow instead of a cluster.
 
 ---
 
@@ -155,27 +128,12 @@ Two momentum/trend gates, both individually toggleable:
 
 | Element | Appearance | Meaning |
 |---|---|---|
-| `BullSignal` | Cyan up-arrow below the bar (weight 4) | All eight gates passed on the bullish side |
-| `BearSignal` | Magenta down-arrow above the bar (weight 4) | All eight gates passed on the bearish side |
-| `AVWAPLine` | Yellow short-dash line | VWAP anchored at the last swing point |
-| Dashboard label | Top-left corner label | Live status of each gate (below) |
+| Bull signal | Cyan up-arrow below the bar | All gates + context votes + cooldown passed, bullish |
+| Bear signal | Magenta down-arrow above the bar | Same, bearish |
+| AVWAP | Yellow dashed line hugging price | VWAP anchored at the last swing |
+| Dashboard | Label (ToS) / table (TV) | Live gate status |
 
-### Dashboard legend
-
-```text
-Score: 8.5 | Time: ✓ | AVWAP: ✓ | Fan: ✓ | RSI: · | HTF: ▲
-```
-
-| Field | Values | Meaning |
-|---|---|---|
-| `Score` | number | Current summed Fib confluence score (gate needs ≥ 7.5) |
-| `Time` | ✓ / × | Inside a Fib time window |
-| `AVWAP` | ✓ / × | Price within the AVWAP band |
-| `Fan` | ✓ / × | Price near a fan ray |
-| `RSI` | ✓ / · / × | ✓ full signal · RSI condition met alone × not met |
-| `HTF` | ▲ / ▼ / ─ | Daily trend up / down / flat |
-
-The label turns **green** when a full signal is active, otherwise stays gray.
+Dashboard fields: `Score` (current confluence total), `Time / AVWAP / Fan` (✓/×  context votes), `RSI` (✓ signal · condition met × not met), `HTF` (▲/▼/─ trend). The TradingView table adds `Grids: n/5` — how many timeframe grids can exist on this chart. The TradingView version also exposes every gate and per-grid score in the **Data Window** (hover any bar to see exactly which condition failed), shows `Score`/`Bull now`/`Bear now` in the status line, and has `alertcondition` hooks for both signals.
 
 ---
 
@@ -184,57 +142,35 @@ The label turns **green** when a full signal is active, otherwise stays gray.
 | Input | Default | Description |
 |---|---|---|
 | `showSignals` | `yes` | Master toggle for the arrows |
-| `confluenceThreshold` | `7.5` | Minimum summed Fib score (Stage 2 gate) |
-| `tolerancePct` | `0.10` | Level-proximity tolerance as a **multiple of ATR** (despite the name, not a percent of price) |
-| `timeToleranceBars` | `2` | ± bars around each Fib time projection |
-| `minSwingATR` | `1.5` | Minimum swing size in ATRs for a valid chart pivot |
-| `requireVolume` | `yes` | Enforce the volume gate |
-| `volumeMult` | `1.3` | Volume must exceed this × 20-bar average |
-| `requireHTFTrend` | `yes` | Enforce the higher-timeframe trend gate |
-| `htfAgg` | `DAY` | Aggregation for the trend filter EMA |
-| `requireRSI` | `yes` | Enforce the RSI gate |
-| `rsiLength` | `14` | RSI period |
-| `rsiOversold` | `40` | RSI extreme threshold for longs |
-| `rsiOverbought` | `60` | RSI extreme threshold for shorts |
-| `showDashboard` | `yes` | Show the status label |
-| `showAVWAP` | `yes` | Draw the anchored VWAP line |
+| `confluenceThreshold` | `7.5` | Minimum summed Fib score |
+| `toleranceATR` | `0.15` | Level-proximity band floor, in ATRs |
+| `toleranceRangePct` | `0.02` | Level band as a fraction of each grid's range |
+| `avwapBandATR` | `0.25` | AVWAP proximity band, in ATRs |
+| `minContextGates` | `2` | Context votes required (of time / AVWAP / fan) |
+| `cooldownBars` | `10` | Bars to stand down after a signal |
+| `timeToleranceBars` | `2` | Minimum time-window tolerance |
+| `minSwingATR` | `1.5` | Minimum chart swing size, in ATRs |
+| `lookback1H / 4H / D / W` | `24 / 30 / 20 / 13` | Bars of each timeframe defining its grid range |
+| `requireVolume` / `volumeMult` | `yes` / `1.3` | Volume gate |
+| `requireHTFTrend` / `htfAgg` | `yes` / `DAY` | Trend gate and its timeframe |
+| `requireRSI` / `rsiLength` / `rsiOversold` / `rsiOverbought` | `yes` / `14` / `40` / `60` | RSI gate |
+| `showDashboard` / `showAVWAP` | `yes` | Display toggles (TV adds dashboard position) |
 
 ---
 
-## Installation (thinkorswim)
+## Installation
 
-1. Open thinkorswim → **Charts** → **Studies** → **Edit Studies…**
-2. Click **Create…** in the lower-left of the Studies dialog.
-3. Delete the placeholder code and paste the full contents of [`ForceOfNature.tos`](ForceOfNature.tos).
-4. Name the study (e.g. `ForceOfNature`), click **OK**, then **Apply**.
-5. Best used on intraday charts (5m–1H) so the 1H/4H/D/W confluence layers are all meaningful.
+**thinkorswim:** Charts → Studies (flask) → Edit studies… → **Create…** → paste [`ForceOfNature.tos`](ForceOfNature.tos) → name it → OK → Apply. **The chart must be 1 hour or lower** (e.g. `180 D : 1h`) — thinkorswim refuses secondary aggregations below the chart's timeframe, so the 1H grid request errors out on 2h/4h/daily charts (the ⓘ icon in the chart's corner shows the message).
+
+**TradingView:** Pine Editor → paste [`ForceOfNature.pine`](ForceOfNature.pine) → Add to chart. Works on any timeframe — grids below the chart's timeframe are disabled instead of erroring, and the dashboard shows `Grids: n/5`. All five grids are active on charts of 1h or below, matching thinkorswim.
+
+When comparing the two platforms, match the **extended-hours setting** on both — it changes the ATR, volume average, and swing pivots.
 
 ---
 
-## Known caveats / design notes
+## Design notes & caveats
 
-- **Signals are rare by design.** With all gates enabled at defaults, most sessions will print nothing. Loosen `confluenceThreshold`, tolerance, or disable gates to increase frequency (at the cost of selectivity).
-- **Divergence logic is stricter than textbook divergence.** `bullDiv` requires price at a 6-bar *lower low* while RSI makes a 6-bar *higher high* (textbook bullish divergence compares RSI *lows*). In practice the RSI gate almost always passes via the extreme condition, not divergence.
-- **`HighestAll`/`LowestAll` scan the whole loaded chart** — including bars to the right of a historical bar. Higher-timeframe swing levels therefore use information a live trader would not have had, so historical signals can look better than live ones (lookahead / repaint bias). Live-edge behavior is unaffected.
-- **Chart-timeframe ATR sizes the HTF swings.** The weekly/daily pivot filters use the chart's ATR, so the effective strictness of Stage 2 changes with the chart timeframe you load.
-- **`tolerancePct` is an ATR multiple**, not a percentage of price — keep that in mind when tuning.
-- The `fibScore` function is direction-agnostic (pure proximity); trade direction comes entirely from the price-action, RSI, and trend gates.
+- **Signals are rare by design** — five hard gates, a 2-of-3 context vote, and a cooldown. Use the dashboard/Data Window to see how close conditions are; loosen `confluenceThreshold` or gate toggles to trade frequency for selectivity.
+- **Non-repainting by construction:** grids use fixed per-timeframe lookbacks, all other gates are causal, and pivots confirm 5 bars after the fact. Levels still update within the *current* HTF bar (as any HTF-aware indicator does), but a printed arrow never disappears when later bars arrive.
+- RSI and EMA warm-up means the first ~20 bars of a chart can't signal; the weekly grid needs 13 weeks of data to be meaningful.
 - This is an **analysis tool, not financial advice**. Backtest and paper-trade before risking capital.
-
----
-
-## TradingView / Pine Script port
-
-The port is implemented in [`ForceOfNature.pine`](ForceOfNature.pine) (Pine Script v6). To install: TradingView → **Pine Editor** → paste the file contents → **Add to chart**. The Pine version adds native `alertcondition` hooks for both signals, so TradingView alerts (push / email / webhook) work out of the box.
-
-A full feasibility analysis and construct-mapping table lives in [`docs/pine-conversion.md`](docs/pine-conversion.md).
-
-**Parity mode (default).** The port reproduces thinkorswim behavior as closely as the platform allows:
-
-- HTF data is fetched exactly like thinkScript's `high(period = …)`: historical chart bars carry the period's *final* value (`lookahead_on`), the live bar the developing value. HTF pivots run on **chart bars** over those step series, sized by the **chart's** ATR — precisely what the original does.
-- `HighestAll` / `LowestAll` (whole-chart scans, including bars to the right) are emulated with a two-pass recomputation: running extremes equal thinkorswim's values at the last bar, and historical signals are recomputed against those final extremes and drawn as labels — matching thinkorswim's repainted history.
-- The anchored VWAP replicates the dynamic-length `Sum` exactly (cumulative reset re-seeded with the 6 bars back to each new pivot); the trend filter is the EMA over chart bars of the HTF close step series, quirks and all; thinkScript's 2-digit `Round()` default is replicated in the time windows.
-
-**Causal mode** (turn off *Match thinkorswim history*) draws only signals that were knowable in real time — better for honest backtesting; historical arrows will differ from thinkorswim by design.
-
-**Chart-timeframe requirement.** The original study can only load on thinkorswim charts of **1 hour or lower** — on higher charts thinkorswim rejects the 1H/4H aggregation requests outright ("secondary period should not be less than primary"). The Pine port instead disables grids below the chart's timeframe and shows the active count in the dashboard (`Grids: n/5`). On a daily chart only 3 of 5 grids exist, so the default 7.5 threshold is rarely reachable — compare against thinkorswim on a matching intraday chart (5m–1H), or lower the threshold when working on daily charts.

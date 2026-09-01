@@ -16,6 +16,7 @@ input toleranceATR          = 0.15;     # proximity band floor, ATR multiple
 input toleranceRangePct     = 0.02;     # proximity band as fraction of each grid's range
 input avwapBandATR          = 0.25;     # AVWAP proximity band, ATR multiple
 input minContextGates       = 2;        # of: time window, AVWAP, fan (0-3)
+input cooldownBars          = 10;       # bars to stand down after a signal
 input timeToleranceBars     = 2;
 input minSwingATR           = 1.5;
 input lookback1H            = 24;       # 1H grid: last N hourly bars
@@ -64,10 +65,16 @@ def minSizeMain = atr * minSwingATR;
 def shMain = getSwingHigh(high, 5, 5, minSizeMain);
 def slMain = getSwingLow(low, 5, 5, minSizeMain);
 
-def lastSwingHighBar = if !IsNaN(shMain) then bn - 5 else lastSwingHighBar[1];
-def lastSwingLowBar  = if !IsNaN(slMain) then bn - 5 else lastSwingLowBar[1];
-def lastSwingHigh    = if !IsNaN(shMain) then shMain else lastSwingHigh[1];
-def lastSwingLow     = if !IsNaN(slMain) then slMain else lastSwingLow[1];
+# Alternate swings so the tracked high/low pair is always one real leg: an
+# opposite-side pivot starts a new leg; a same-side pivot only counts if it
+# is more extreme than the current leg extreme
+def swingDir = if !IsNaN(shMain) and IsNaN(slMain) then 1
+               else if !IsNaN(slMain) and IsNaN(shMain) then -1
+               else swingDir[1];
+def lastSwingHigh    = if !IsNaN(shMain) and (swingDir[1] != 1 or shMain >= lastSwingHigh[1]) then shMain else lastSwingHigh[1];
+def lastSwingHighBar = if !IsNaN(shMain) and (swingDir[1] != 1 or shMain >= lastSwingHigh[1]) then bn - 5 else lastSwingHighBar[1];
+def lastSwingLow     = if !IsNaN(slMain) and (swingDir[1] != -1 or slMain <= lastSwingLow[1]) then slMain else lastSwingLow[1];
+def lastSwingLowBar  = if !IsNaN(slMain) and (swingDir[1] != -1 or slMain <= lastSwingLow[1]) then bn - 5 else lastSwingLowBar[1];
 
 def lastSwingBar = Max(lastSwingHighBar, lastSwingLowBar);
 def prevSwingBar = Min(lastSwingHighBar, lastSwingLowBar);
@@ -97,21 +104,31 @@ script fibScore {
     input tol = 0.0;
 
     def range = hi - lo;
+    def f35   = lo + 0.350 * range;
     def f382  = lo + 0.382 * range;
     def f50   = lo + 0.500 * range;
     def f618  = lo + 0.618 * range;
     def f65   = lo + 0.650 * range;
-    def f127  = hi + 0.272 * range;
-    def f161  = hi + 0.618 * range;
+    def f127u = hi + 0.272 * range;
+    def f161u = hi + 0.618 * range;
+    def f127d = lo - 0.272 * range;
+    def f161d = lo - 0.618 * range;
 
+    # golden pocket (0.618-0.65 up from the low) and its bearish mirror
+    # (0.35-0.382, the same pocket measured down from the high) score
+    # equally, so short setups are not structurally under-weighted;
+    # extensions exist on both sides of the range
     def inGoldenPocket = price >= f618 and price <= f65;
+    def inBearPocket   = price >= f35 and price <= f382;
 
     def s =
         (if AbsValue(price - f618) <= tol or inGoldenPocket then 3.5 else 0.0) +
+        (if AbsValue(price - f382) <= tol or inBearPocket then 3.5 else 0.0) +
         (if AbsValue(price - f50)  <= tol then 2.5 else 0.0) +
-        (if AbsValue(price - f382) <= tol then 2.0 else 0.0) +
-        (if AbsValue(price - f127) <= tol then 1.5 else 0.0) +
-        (if AbsValue(price - f161) <= tol then 1.5 else 0.0);
+        (if AbsValue(price - f127u) <= tol then 1.5 else 0.0) +
+        (if AbsValue(price - f161u) <= tol then 1.5 else 0.0) +
+        (if AbsValue(price - f127d) <= tol then 1.5 else 0.0) +
+        (if AbsValue(price - f161d) <= tol then 1.5 else 0.0);
     # NaN guard: a timeframe with no qualifying swings must contribute 0 —
     # otherwise NaN poisons the summed score and silently disables every
     # signal on the chart (Score shows N/A in the dashboard)
@@ -244,13 +261,17 @@ def bearConfluence =
     rsiBearOK and
     (!requireHTFTrend or htfTrendDown);
 
+# suppress signal clusters: once a signal fires, stand down for N bars
+def lastSigBar = if (bullConfluence or bearConfluence) and bn - lastSigBar[1] > cooldownBars then bn else lastSigBar[1];
+def canFire = bn - lastSigBar[1] > cooldownBars;
+
 # ---------- Signals ----------
-plot BullSignal = if showSignals and bullConfluence then low - atr * 0.45 else na;
+plot BullSignal = if showSignals and bullConfluence and canFire then low - atr * 0.45 else na;
 BullSignal.SetPaintingStrategy(PaintingStrategy.ARROW_UP);
 BullSignal.SetDefaultColor(Color.CYAN);
 BullSignal.SetLineWeight(4);
 
-plot BearSignal = if showSignals and bearConfluence then high + atr * 0.45 else na;
+plot BearSignal = if showSignals and bearConfluence and canFire then high + atr * 0.45 else na;
 BearSignal.SetPaintingStrategy(PaintingStrategy.ARROW_DOWN);
 BearSignal.SetDefaultColor(Color.MAGENTA);
 BearSignal.SetLineWeight(4);

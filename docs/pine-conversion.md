@@ -1,6 +1,6 @@
 # Porting Force of Nature to Pine Script (TradingView)
 
-> **Status: implemented (parity revision).** The port exists at [`../ForceOfNature.pine`](../ForceOfNature.pine). The first iteration followed the causal redesigns described below; a field comparison showed those redesigns changed signal behavior materially, so the shipped version defaults to a **thinkorswim-parity mode** and keeps the causal behavior as an option. See the revision notes directly below.
+> **Status: superseded by a joint redesign.** This document chronicles the porting effort and remains useful as a thinkScript↔Pine construct reference, but the indicator has since been deliberately redesigned on **both** platforms (see the Phase 1–4 commits): swing-to-swing RSI divergence, a true HTF EMA, per-timeframe range-anchored fib grids (replacing `HighestAll` — which also made the repaint-parity machinery described below obsolete), symmetric golden pockets, ATR/range-scaled tolerances, a 2-of-3 context vote, and a signal cooldown. [`../ForceOfNature.tos`](../ForceOfNature.tos) and [`../ForceOfNature.pine`](../ForceOfNature.pine) are maintained in lockstep; the README describes the current design.
 
 ## Parity revision notes
 
