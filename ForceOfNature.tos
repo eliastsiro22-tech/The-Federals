@@ -12,7 +12,10 @@ declare upper;
 
 input showSignals           = yes;
 input confluenceThreshold   = 7.5;      # Weighted score threshold
-input tolerancePct          = 0.10;
+input toleranceATR          = 0.15;     # proximity band floor, ATR multiple
+input toleranceRangePct     = 0.02;     # proximity band as fraction of each grid's range
+input avwapBandATR          = 0.25;     # AVWAP proximity band, ATR multiple
+input minContextGates       = 2;        # of: time window, AVWAP, fan (0-3)
 input timeToleranceBars     = 2;
 input minSwingATR           = 1.5;
 input lookback1H            = 24;       # 1H grid: last N hourly bars
@@ -33,7 +36,7 @@ input showAVWAP             = yes;
 def na = Double.NaN;
 def bn = BarNumber();
 def atr = Average(TrueRange(high, close, low), 14);
-def tol = atr * tolerancePct;
+def tolFloor = atr * toleranceATR;
 def volAvg = Average(volume, 20);
 
 # ---------- Improved Significant Swing Detection ----------
@@ -115,11 +118,19 @@ script fibScore {
     plot out = if IsNaN(range) or IsNaN(tol) then 0.0 else s;
 }
 
-def scoreD     = fibScore(shD,  slD,  close, tol);
-def score4H    = fibScore(sh4H, sl4H, close, tol);
-def score1H    = fibScore(sh1H, sl1H, close, tol);
-def scoreW     = fibScore(shW,  slW,  close, tol);
-def scoreMain  = fibScore(lastSwingHigh, lastSwingLow, close, tol);
+# per-grid tolerance: ATR floor, widened proportionally for bigger ranges —
+# a weekly level deserves a wider band than a 1-hour level
+def tolMain = Max(tolFloor, (lastSwingHigh - lastSwingLow) * toleranceRangePct);
+def tolD    = Max(tolFloor, (shD - slD)   * toleranceRangePct);
+def tol4H   = Max(tolFloor, (sh4H - sl4H) * toleranceRangePct);
+def tol1H   = Max(tolFloor, (sh1H - sl1H) * toleranceRangePct);
+def tolW    = Max(tolFloor, (shW - slW)   * toleranceRangePct);
+
+def scoreD     = fibScore(shD,  slD,  close, tolD);
+def score4H    = fibScore(sh4H, sl4H, close, tol4H);
+def score1H    = fibScore(sh1H, sl1H, close, tol1H);
+def scoreW     = fibScore(shW,  slW,  close, tolW);
+def scoreMain  = fibScore(lastSwingHigh, lastSwingLow, close, tolMain);
 
 def priceConfluenceScore = scoreD + score4H + score1H + scoreW + scoreMain;
 def isPriceConfluence    = priceConfluenceScore >= confluenceThreshold;
@@ -132,12 +143,16 @@ def t618 = lastSwingBar + Round(span * 0.618);
 def t100 = lastSwingBar + span;
 def t161 = lastSwingBar + Round(span * 1.618);
 
+# windows only mean something on a real leg (span >= 8) and their tolerance
+# scales with the leg duration instead of a fixed bar count
+def timeTol = Max(timeToleranceBars, Round(span * 0.05, 0));
 def isTimeWindow =
-    AbsValue(bn - t382) <= timeToleranceBars or
-    AbsValue(bn - t500) <= timeToleranceBars or
-    AbsValue(bn - t618) <= timeToleranceBars or
-    AbsValue(bn - t100) <= timeToleranceBars or
-    AbsValue(bn - t161) <= timeToleranceBars;
+    span >= 8 and
+    (AbsValue(bn - t382) <= timeTol or
+     AbsValue(bn - t500) <= timeTol or
+     AbsValue(bn - t618) <= timeTol or
+     AbsValue(bn - t100) <= timeTol or
+     AbsValue(bn - t161) <= timeTol);
 
 # ---------- Anchored VWAP ----------
 # Sum() requires a constant length in thinkScript, so the anchored sums are
@@ -147,7 +162,7 @@ def newAnchor = lastSwingBar != lastSwingBar[1];
 def cumPV = if newAnchor then Sum(close * volume, 6) else cumPV[1] + close * volume;
 def cumV  = if newAnchor then Sum(volume, 6) else cumV[1] + volume;
 def avwap = if bn >= lastSwingBar and cumV != 0 then cumPV / cumV else na;
-def nearAVWAP = AbsValue(close - avwap) <= atr * 0.12;
+def nearAVWAP = AbsValue(close - avwap) <= atr * avwapBandATR;
 
 # ---------- Fibonacci Fan Proximity ----------
 def fanRange = lastSwingHigh - lastSwingLow;
@@ -160,9 +175,9 @@ def fan50  = if isUpSwing then lastSwingLow + fanSlope * 0.500 * (bn - lastSwing
 def fan618 = if isUpSwing then lastSwingLow + fanSlope * 0.618 * (bn - lastSwingLowBar)
                           else lastSwingHigh - fanSlope * 0.618 * (bn - lastSwingHighBar);
 
-def nearFan = AbsValue(close - fan382) <= tol or
-              AbsValue(close - fan50)  <= tol or
-              AbsValue(close - fan618) <= tol;
+def nearFan = AbsValue(close - fan382) <= tolMain or
+              AbsValue(close - fan50)  <= tolMain or
+              AbsValue(close - fan618) <= tolMain;
 
 # ---------- HTF Trend Filter ----------
 # The EMA must be computed inline on the secondary aggregation: storing the
@@ -207,11 +222,15 @@ def rsiBullOK = !requireRSI or rsiExtremeBull or bullDiv;
 def rsiBearOK = !requireRSI or rsiExtremeBear or bearDiv;
 
 # ---------- FULL HIGH-CONVICTION CONFLUENCE ----------
+# time window, AVWAP and fan act as context votes: require K of 3 instead of
+# all three tight bands at once (the old triple-AND multiplied three narrow
+# proximity requirements and made live signals practically impossible)
+def contextCount = (if isTimeWindow then 1 else 0) + (if nearAVWAP then 1 else 0) + (if nearFan then 1 else 0);
+def contextOK = contextCount >= minContextGates;
+
 def bullConfluence =
     isPriceConfluence and
-    isTimeWindow and
-    nearAVWAP and
-    nearFan and
+    contextOK and
     bullPA and
     volOK and
     rsiBullOK and
@@ -219,9 +238,7 @@ def bullConfluence =
 
 def bearConfluence =
     isPriceConfluence and
-    isTimeWindow and
-    nearAVWAP and
-    nearFan and
+    contextOK and
     bearPA and
     volOK and
     rsiBearOK and

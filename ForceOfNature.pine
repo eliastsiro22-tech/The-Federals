@@ -26,7 +26,10 @@ indicator("Force of Nature (IndicatorFON)", "FON", overlay = true)
 // ---------- Inputs ----------
 showSignals         = input.bool(true,  "Show signals")
 confluenceThreshold = input.float(7.5,  "Confluence score threshold", minval = 0, step = 0.5)
-tolerancePct        = input.float(0.10, "Level tolerance (ATR multiple)", minval = 0, step = 0.01)
+toleranceATR        = input.float(0.15, "Level tolerance floor (ATR multiple)", minval = 0, step = 0.01)
+toleranceRangePct   = input.float(0.02, "Level tolerance (fraction of grid range)", minval = 0, step = 0.005)
+avwapBandATR        = input.float(0.25, "AVWAP band (ATR multiple)", minval = 0, step = 0.01)
+minContextGates     = input.int(2,      "Context gates required (time/AVWAP/fan)", minval = 0, maxval = 3)
 timeToleranceBars   = input.int(2,      "Time window tolerance (bars)", minval = 0)
 minSwingATR         = input.float(1.5,  "Min chart swing size (ATR multiple)", minval = 0, step = 0.1)
 lookback1H          = input.int(24,     "1H grid lookback (hourly bars)", minval = 2)
@@ -46,9 +49,9 @@ dashPosTxt          = input.string("Top right", "Dashboard position", options = 
 showAVWAP           = input.bool(true,  "Show anchored VWAP")
 
 // thinkScript Average(TrueRange(...)) is a simple MA of true range
-atr    = ta.sma(ta.tr(true), 14)
-tol    = atr * tolerancePct
-volAvg = ta.sma(volume, 20)
+atr      = ta.sma(ta.tr(true), 14)
+tolFloor = atr * toleranceATR
+volAvg   = ta.sma(volume, 20)
 
 // ---------- Helpers ----------
 // Exact replica of thinkScript getSwingHigh/getSwingLow: the == Highest
@@ -68,8 +71,8 @@ stepSwingLow(float src, simple int l, simple int r, float minSize) =>
 round2(float x) =>
     math.round(x * 100) / 100
 
-inTimeWindow(float t) =>
-    not na(t) and math.abs(bar_index - t) <= timeToleranceBars
+inTimeWindow(float t, float tolBars) =>
+    not na(t) and not na(tolBars) and math.abs(bar_index - t) <= tolBars
 
 // ---------- Weighted Fib Score (Golden Pocket emphasis) ----------
 fibScore(float hi, float lo, float price, float tolerance) =>
@@ -137,11 +140,22 @@ shW  = wOK ? shW_r : na
 slW  = wOK ? slW_r : na
 
 // ---------- Scores ----------
-scoreD    = fibScore(shD,  slD,  close, tol)
-score4H   = fibScore(sh4H, sl4H, close, tol)
-score1H   = fibScore(sh1H, sl1H, close, tol)
-scoreW    = fibScore(shW,  slW,  close, tol)
-scoreMain = fibScore(lastSwingHigh, lastSwingLow, close, tol)
+// per-grid tolerance: ATR floor, widened proportionally for bigger ranges —
+// a weekly level deserves a wider band than a 1-hour level
+gridTol(float hi, float lo) =>
+    math.max(tolFloor, (hi - lo) * toleranceRangePct)
+
+tolMain = gridTol(lastSwingHigh, lastSwingLow)
+tolD    = gridTol(shD, slD)
+tol4H   = gridTol(sh4H, sl4H)
+tol1H   = gridTol(sh1H, sl1H)
+tolW    = gridTol(shW, slW)
+
+scoreD    = fibScore(shD,  slD,  close, tolD)
+score4H   = fibScore(sh4H, sl4H, close, tol4H)
+score1H   = fibScore(sh1H, sl1H, close, tol1H)
+scoreW    = fibScore(shW,  slW,  close, tolW)
+scoreMain = fibScore(lastSwingHigh, lastSwingLow, close, tolMain)
 
 priceConfluenceScore = scoreD + score4H + score1H + scoreW + scoreMain
 isPriceConfluence    = priceConfluenceScore >= confluenceThreshold
@@ -155,8 +169,12 @@ t618 = swingsReady ? lastSwingBar + round2(span * 0.618) : na
 t100 = swingsReady ? lastSwingBar + span : na
 t161 = swingsReady ? lastSwingBar + round2(span * 1.618) : na
 
-isTimeWindow = inTimeWindow(t382) or inTimeWindow(t500) or inTimeWindow(t618) or
-  inTimeWindow(t100) or inTimeWindow(t161)
+// windows only mean something on a real leg (span >= 8) and their tolerance
+// scales with the leg duration instead of a fixed bar count
+timeTol = swingsReady ? math.max(timeToleranceBars, math.round(span * 0.05)) : na
+
+isTimeWindow = nz(span) >= 8 and (inTimeWindow(t382, timeTol) or inTimeWindow(t500, timeTol) or
+  inTimeWindow(t618, timeTol) or inTimeWindow(t100, timeTol) or inTimeWindow(t161, timeTol))
 
 // ---------- Anchored VWAP ----------
 // Cumulative-reset replication of Sum(x, barsSince): a new anchor always
@@ -178,7 +196,7 @@ else if not na(anchorBar)
     cumV  += volume
 
 avwap     = not na(cumV) and cumV != 0 ? cumPV / cumV : na
-nearAVWAP = not na(avwap) and math.abs(close - avwap) <= atr * 0.12
+nearAVWAP = not na(avwap) and math.abs(close - avwap) <= atr * avwapBandATR
 
 // ---------- Fibonacci Fan Proximity ----------
 fanRange = lastSwingHigh - lastSwingLow
@@ -194,8 +212,8 @@ fan382 = fanLevel(0.382)
 fan50  = fanLevel(0.500)
 fan618 = fanLevel(0.618)
 
-nearFan = not na(fan382) and (math.abs(close - fan382) <= tol or
-  math.abs(close - fan50) <= tol or math.abs(close - fan618) <= tol)
+nearFan = not na(fan382) and not na(tolMain) and (math.abs(close - fan382) <= tolMain or
+  math.abs(close - fan50) <= tolMain or math.abs(close - fan618) <= tolMain)
 
 // ---------- HTF Trend Filter ----------
 // true 21-period EMA of the higher timeframe, computed on its own bars
@@ -248,9 +266,15 @@ rsiBullOK = not requireRSI or rsiExtremeBull or bullDiv
 rsiBearOK = not requireRSI or rsiExtremeBear or bearDiv
 
 // ---------- FULL HIGH-CONVICTION CONFLUENCE ----------
-bullGates = isTimeWindow and nearAVWAP and nearFan and bullPA and volOK and
+// time window, AVWAP and fan act as context votes: require K of 3 instead
+// of all three tight bands at once (the old triple-AND multiplied three
+// narrow proximity requirements and made live signals practically impossible)
+contextCount = (isTimeWindow ? 1 : 0) + (nearAVWAP ? 1 : 0) + (nearFan ? 1 : 0)
+contextOK = contextCount >= minContextGates
+
+bullGates = contextOK and bullPA and volOK and
   rsiBullOK and (not requireHTFTrend or htfTrendUp)
-bearGates = isTimeWindow and nearAVWAP and nearFan and bearPA and volOK and
+bearGates = contextOK and bearPA and volOK and
   rsiBearOK and (not requireHTFTrend or htfTrendDown)
 
 bullConfluence = bullGates and isPriceConfluence
@@ -270,6 +294,7 @@ plot(volOK ? 1 : 0, "Gate: volume", display = display.data_window)
 plot(rsiBullOK ? 1 : 0, "Gate: RSI bull", display = display.data_window)
 plot(rsiBearOK ? 1 : 0, "Gate: RSI bear", display = display.data_window)
 plot(htfTrendUp ? 1 : 0, "Gate: HTF trend up", display = display.data_window)
+plot(contextCount, "Context gates (0-3)", display = display.data_window)
 plot(scoreMain, "Score: chart grid", display = display.data_window)
 plot(scoreD, "Score: daily grid", display = display.data_window)
 plot(score4H, "Score: 4H grid", display = display.data_window)
