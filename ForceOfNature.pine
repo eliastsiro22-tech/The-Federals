@@ -43,6 +43,7 @@ rsiLength           = input.int(14,     "RSI length", minval = 1)
 rsiOversold         = input.float(40,   "RSI oversold", minval = 0, maxval = 100)
 rsiOverbought       = input.float(60,   "RSI overbought", minval = 0, maxval = 100)
 showDashboard       = input.bool(true,  "Show dashboard")
+dashPosTxt          = input.string("Top right", "Dashboard position", options = ["Top right", "Top left", "Bottom right", "Bottom left"])
 showAVWAP           = input.bool(true,  "Show anchored VWAP")
 
 // thinkScript Average(TrueRange(...)) is a simple MA of true range
@@ -273,6 +274,26 @@ bearGates = isTimeWindow and nearAVWAP and nearFan and bearPA and volOK and
 bullConfluence = bullGates and isPriceConfluence
 bearConfluence = bearGates and isPriceConfluence
 
+// ---------- Diagnostics (status line + data window, nothing on the pane) ----------
+// hover any bar with the Data Window open to see which gates pass (1) or fail (0)
+plot(priceConfluenceScore, "Score", color.gray, display = display.status_line + display.data_window)
+plot(bullConfluence ? 1 : 0, "Bull now", color.aqua, display = display.status_line + display.data_window)
+plot(bearConfluence ? 1 : 0, "Bear now", color.fuchsia, display = display.status_line + display.data_window)
+plot(isTimeWindow ? 1 : 0, "Gate: time window", display = display.data_window)
+plot(nearAVWAP ? 1 : 0, "Gate: AVWAP", display = display.data_window)
+plot(nearFan ? 1 : 0, "Gate: fan", display = display.data_window)
+plot(bullPA ? 1 : 0, "Gate: bull PA", display = display.data_window)
+plot(bearPA ? 1 : 0, "Gate: bear PA", display = display.data_window)
+plot(volOK ? 1 : 0, "Gate: volume", display = display.data_window)
+plot(rsiBullOK ? 1 : 0, "Gate: RSI bull", display = display.data_window)
+plot(rsiBearOK ? 1 : 0, "Gate: RSI bear", display = display.data_window)
+plot(htfTrendUp ? 1 : 0, "Gate: HTF trend up", display = display.data_window)
+plot(scoreMain, "Score: chart grid", display = display.data_window)
+plot(scoreD, "Score: daily grid", display = display.data_window)
+plot(score4H, "Score: 4H grid", display = display.data_window)
+plot(score1H, "Score: 1H grid", display = display.data_window)
+plot(scoreW, "Score: weekly grid", display = display.data_window)
+
 // ---------- Signal history (for thinkorswim-parity repaint mode) ----------
 var closeA = array.new_float()
 var tolA   = array.new_float()
@@ -297,8 +318,9 @@ if barstate.isconfirmed
 
 // ---------- Signals ----------
 // causal mode: arrows use only information available at each bar
-plotshape(not repaintParity and showSignals and bullConfluence, "Bull signal (causal)", shape.triangleup, location.belowbar, color.new(color.aqua, 0), size = size.small)
-plotshape(not repaintParity and showSignals and bearConfluence, "Bear signal (causal)", shape.triangledown, location.abovebar, color.new(color.fuchsia, 0), size = size.small)
+// (display.pane keeps these always-0-in-parity-mode series out of the status line)
+plotshape(not repaintParity and showSignals and bullConfluence, "Bull signal (causal)", shape.triangleup, location.belowbar, color.new(color.aqua, 0), size = size.small, display = display.pane)
+plotshape(not repaintParity and showSignals and bearConfluence, "Bear signal (causal)", shape.triangledown, location.abovebar, color.new(color.fuchsia, 0), size = size.small, display = display.pane)
 
 alertcondition(bullConfluence, "FON Bull", "Force of Nature: bullish confluence on {{ticker}} {{interval}}")
 alertcondition(bearConfluence, "FON Bear", "Force of Nature: bearish confluence on {{ticker}} {{interval}}")
@@ -350,7 +372,11 @@ plot(showAVWAP ? avwap : na, "AVWAP", color.new(color.yellow, 0), 2, plot.style_
 // ---------- Dashboard ----------
 activeGrids = 1 + (d1OK ? 1 : 0) + (h4OK ? 1 : 0) + (h1OK ? 1 : 0) + (wOK ? 1 : 0)
 
-var table dash = showDashboard ? table.new(position.top_left, 7, 1) : na
+// default Top right: on TradingView the top-left corner sits under the
+// indicator legend, unlike thinkorswim's AddLabel
+dashPos = dashPosTxt == "Top right" ? position.top_right : dashPosTxt == "Top left" ? position.top_left : dashPosTxt == "Bottom right" ? position.bottom_right : position.bottom_left
+
+var table dash = showDashboard ? table.new(dashPos, 7, 1) : na
 
 if showDashboard and barstate.islast
     sigActive = bullConfluence or bearConfluence
