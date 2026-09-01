@@ -15,6 +15,10 @@ input confluenceThreshold   = 7.5;      # Weighted score threshold
 input tolerancePct          = 0.10;
 input timeToleranceBars     = 2;
 input minSwingATR           = 1.5;
+input lookback1H            = 24;       # 1H grid: last N hourly bars
+input lookback4H            = 30;       # 4H grid: last N 4-hour bars
+input lookbackD             = 20;       # Daily grid: last N days
+input lookbackW             = 13;       # Weekly grid: last N weeks
 input requireVolume         = yes;
 input volumeMult            = 1.3;
 input requireHTFTrend       = yes;
@@ -66,24 +70,21 @@ def lastSwingBar = Max(lastSwingHighBar, lastSwingLowBar);
 def prevSwingBar = Min(lastSwingHighBar, lastSwingLowBar);
 def isUpSwing    = lastSwingHighBar > lastSwingLowBar;
 
-# ---------- Key Higher Timeframe Swings ----------
-def hD  = high(period = AggregationPeriod.DAY);
-def lD  = low(period  = AggregationPeriod.DAY);
-def h4H = high(period = AggregationPeriod.FOUR_HOURS);
-def l4H = low(period  = AggregationPeriod.FOUR_HOURS);
-def h1H = high(period = AggregationPeriod.HOUR);
-def l1H = low(period  = AggregationPeriod.HOUR);
-def hW  = high(period = AggregationPeriod.WEEK);
-def lW  = low(period  = AggregationPeriod.WEEK);
-
-def shD  = HighestAll(getSwingHigh(hD,  3, 3, atr * 2.0));
-def slD  = LowestAll(getSwingLow(lD,   3, 3, atr * 2.0));
-def sh4H = HighestAll(getSwingHigh(h4H, 3, 3, atr * 1.5));
-def sl4H = LowestAll(getSwingLow(l4H,  3, 3, atr * 1.5));
-def sh1H = HighestAll(getSwingHigh(h1H, 3, 3, atr * 1.0));
-def sl1H = LowestAll(getSwingLow(l1H,  3, 3, atr * 1.0));
-def shW  = HighestAll(getSwingHigh(hW,  2, 2, atr * 3.0));
-def slW  = LowestAll(getSwingLow(lW,   2, 2, atr * 3.0));
+# ---------- Key Higher Timeframe Ranges ----------
+# Each timeframe's fib grid is anchored to its recent trading range (the
+# last N bars of that timeframe). Highest/Lowest are computed inline on the
+# secondary aggregation so the lengths count HTF bars, not chart bars.
+# This replaces the old HighestAll whole-chart scan: grids are now genuinely
+# timeframe-distinct, independent of how much history is loaded, and do not
+# repaint when a new chart-wide extreme prints later.
+def shD  = Highest(high(period = AggregationPeriod.DAY),        lookbackD);
+def slD  = Lowest(low(period   = AggregationPeriod.DAY),        lookbackD);
+def sh4H = Highest(high(period = AggregationPeriod.FOUR_HOURS), lookback4H);
+def sl4H = Lowest(low(period   = AggregationPeriod.FOUR_HOURS), lookback4H);
+def sh1H = Highest(high(period = AggregationPeriod.HOUR),       lookback1H);
+def sl1H = Lowest(low(period   = AggregationPeriod.HOUR),       lookback1H);
+def shW  = Highest(high(period = AggregationPeriod.WEEK),       lookbackW);
+def slW  = Lowest(low(period   = AggregationPeriod.WEEK),       lookbackW);
 
 # ---------- Weighted Fib Score (Golden Pocket emphasis) ----------
 script fibScore {

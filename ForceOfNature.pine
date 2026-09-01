@@ -7,33 +7,32 @@
 // + HTF Trend + Quality PA + Volume + RSI Extreme/Divergence
 // Rare, high-confidence signals only
 //
-// Parity notes (see docs/pine-conversion.md):
-//  - HTF data uses lookahead_on to mirror thinkScript high(period=...)
-//    semantics: historical chart bars carry the HTF period's FINAL value,
-//    the live bar carries the developing value — same as thinkorswim.
-//  - HTF pivots run on CHART bars over those step series, sized by the
-//    CHART's ATR, exactly as the original getSwingHigh/getSwingLow calls do.
-//  - HighestAll/LowestAll (whole-chart scans) are emulated: running
-//    extremes equal thinkorswim's values at the last bar, and repaint-parity
-//    mode recomputes historical signals against those final extremes.
-//  - "Match thinkorswim history" off = causal mode: arrows use only
-//    information available at each bar (honest backtesting; history differs).
+// Design notes (kept in lockstep with the thinkScript version):
+//  - Each timeframe's fib grid is anchored to that timeframe's recent
+//    trading range (last N bars of the TF), not whole-chart extremes —
+//    grids are timeframe-distinct, independent of loaded history, and do
+//    not repaint when a new chart-wide extreme prints later.
+//  - lookahead_on mirrors thinkScript secondary-aggregation semantics:
+//    historical chart bars carry the HTF bar's final value, the live bar
+//    the developing value. Values only change within the current HTF bar.
 //  - Grids below the chart timeframe are disabled — thinkorswim refuses to
-//    load the study there at all ("secondary period less than primary");
-//    the dashboard shows the active grid count.
+//    load the study there at all; the dashboard shows the active count.
 //  - thinkScript Round() defaults to 2-digit precision — replicated in the
 //    Fib time windows.
 // =============================================================
 
-indicator("Force of Nature (IndicatorFON)", "FON", overlay = true, max_labels_count = 500)
+indicator("Force of Nature (IndicatorFON)", "FON", overlay = true)
 
 // ---------- Inputs ----------
 showSignals         = input.bool(true,  "Show signals")
-repaintParity       = input.bool(true,  "Match thinkorswim history (repaint)")
 confluenceThreshold = input.float(7.5,  "Confluence score threshold", minval = 0, step = 0.5)
 tolerancePct        = input.float(0.10, "Level tolerance (ATR multiple)", minval = 0, step = 0.01)
 timeToleranceBars   = input.int(2,      "Time window tolerance (bars)", minval = 0)
 minSwingATR         = input.float(1.5,  "Min chart swing size (ATR multiple)", minval = 0, step = 0.1)
+lookback1H          = input.int(24,     "1H grid lookback (hourly bars)", minval = 2)
+lookback4H          = input.int(30,     "4H grid lookback (4-hour bars)", minval = 2)
+lookbackD           = input.int(20,     "Daily grid lookback (days)", minval = 2)
+lookbackW           = input.int(13,     "Weekly grid lookback (weeks)", minval = 2)
 requireVolume       = input.bool(true,  "Require volume surge")
 volumeMult          = input.float(1.3,  "Volume multiple", minval = 0, step = 0.1)
 requireHTFTrend     = input.bool(true,  "Require HTF trend alignment")
@@ -65,25 +64,9 @@ stepSwingLow(float src, simple int l, simple int r, float minSize) =>
     float lo = ta.lowest(src, l + r + 1)
     src[l] == lo and (hi - src[l]) >= minSize ? src[l] : na
 
-// running extremes; at the last bar these equal HighestAll/LowestAll over
-// the loaded chart, which is all thinkorswim ever sees either
-runMax(float v) =>
-    var float m = na
-    m := na(v) ? m : math.max(nz(m, v), v)
-    m
-
-runMin(float v) =>
-    var float m = na
-    m := na(v) ? m : math.min(nz(m, v), v)
-    m
-
 // thinkScript Round() defaults to 2-digit precision
 round2(float x) =>
     math.round(x * 100) / 100
-
-// na-safe change detector
-chg(float x) =>
-    nz(x, -1.0e308) != nz(x[1], -1.0e308)
 
 inTimeWindow(float t) =>
     not na(t) and math.abs(bar_index - t) <= timeToleranceBars
@@ -129,44 +112,29 @@ lastSwingBar = swingsReady ? math.max(lastSwingHighBar, lastSwingLowBar) : na
 prevSwingBar = swingsReady ? math.min(lastSwingHighBar, lastSwingLowBar) : na
 isUpSwing    = swingsReady and lastSwingHighBar > lastSwingLowBar
 
-// ---------- Key Higher Timeframe Swings ----------
-// lookahead_on mirrors thinkScript high(period=...): historical bars carry
-// the period's final value; the live bar carries the developing value.
-// Grids below the chart timeframe are disabled (thinkorswim errors there).
+// ---------- Key Higher Timeframe Ranges ----------
+// each timeframe's fib grid anchors to its recent trading range (last N
+// bars of that TF, computed on the TF's own bars). Grids below the chart
+// timeframe are disabled (thinkorswim errors there).
 chartSec = timeframe.in_seconds(timeframe.period)
 d1OK = chartSec <= timeframe.in_seconds("D")
 h4OK = chartSec <= timeframe.in_seconds("240")
 h1OK = chartSec <= timeframe.in_seconds("60")
 wOK  = chartSec <= timeframe.in_seconds("W")
 
-hD  = request.security(syminfo.tickerid, d1OK ? "D" : timeframe.period,   high, lookahead = barmerge.lookahead_on)
-lD  = request.security(syminfo.tickerid, d1OK ? "D" : timeframe.period,   low,  lookahead = barmerge.lookahead_on)
-h4H = request.security(syminfo.tickerid, h4OK ? "240" : timeframe.period, high, lookahead = barmerge.lookahead_on)
-l4H = request.security(syminfo.tickerid, h4OK ? "240" : timeframe.period, low,  lookahead = barmerge.lookahead_on)
-h1H = request.security(syminfo.tickerid, h1OK ? "60" : timeframe.period,  high, lookahead = barmerge.lookahead_on)
-l1H = request.security(syminfo.tickerid, h1OK ? "60" : timeframe.period,  low,  lookahead = barmerge.lookahead_on)
-hW  = request.security(syminfo.tickerid, wOK ? "W" : timeframe.period,    high, lookahead = barmerge.lookahead_on)
-lW  = request.security(syminfo.tickerid, wOK ? "W" : timeframe.period,    low,  lookahead = barmerge.lookahead_on)
+[shD_r, slD_r]   = request.security(syminfo.tickerid, d1OK ? "D" : timeframe.period,   [ta.highest(high, lookbackD),  ta.lowest(low, lookbackD)],  lookahead = barmerge.lookahead_on)
+[sh4H_r, sl4H_r] = request.security(syminfo.tickerid, h4OK ? "240" : timeframe.period, [ta.highest(high, lookback4H), ta.lowest(low, lookback4H)], lookahead = barmerge.lookahead_on)
+[sh1H_r, sl1H_r] = request.security(syminfo.tickerid, h1OK ? "60" : timeframe.period,  [ta.highest(high, lookback1H), ta.lowest(low, lookback1H)], lookahead = barmerge.lookahead_on)
+[shW_r, slW_r]   = request.security(syminfo.tickerid, wOK ? "W" : timeframe.period,    [ta.highest(high, lookbackW),  ta.lowest(low, lookbackW)],  lookahead = barmerge.lookahead_on)
 
-// pivots on CHART bars over the step series, sized by the CHART's ATR —
-// exactly as the original applies getSwingHigh/getSwingLow to hD/h4H/...
-shD_raw  = stepSwingHigh(hD,  3, 3, atr * 2.0)
-slD_raw  = stepSwingLow(lD,   3, 3, atr * 2.0)
-sh4H_raw = stepSwingHigh(h4H, 3, 3, atr * 1.5)
-sl4H_raw = stepSwingLow(l4H,  3, 3, atr * 1.5)
-sh1H_raw = stepSwingHigh(h1H, 3, 3, atr * 1.0)
-sl1H_raw = stepSwingLow(l1H,  3, 3, atr * 1.0)
-shW_raw  = stepSwingHigh(hW,  2, 2, atr * 3.0)
-slW_raw  = stepSwingLow(lW,   2, 2, atr * 3.0)
-
-shD  = runMax(d1OK ? shD_raw : na)
-slD  = runMin(d1OK ? slD_raw : na)
-sh4H = runMax(h4OK ? sh4H_raw : na)
-sl4H = runMin(h4OK ? sl4H_raw : na)
-sh1H = runMax(h1OK ? sh1H_raw : na)
-sl1H = runMin(h1OK ? sl1H_raw : na)
-shW  = runMax(wOK ? shW_raw : na)
-slW  = runMin(wOK ? slW_raw : na)
+shD  = d1OK ? shD_r : na
+slD  = d1OK ? slD_r : na
+sh4H = h4OK ? sh4H_r : na
+sl4H = h4OK ? sl4H_r : na
+sh1H = h1OK ? sh1H_r : na
+sl1H = h1OK ? sl1H_r : na
+shW  = wOK ? shW_r : na
+slW  = wOK ? slW_r : na
 
 // ---------- Scores ----------
 scoreD    = fibScore(shD,  slD,  close, tol)
@@ -280,8 +248,6 @@ rsiBullOK = not requireRSI or rsiExtremeBull or bullDiv
 rsiBearOK = not requireRSI or rsiExtremeBear or bearDiv
 
 // ---------- FULL HIGH-CONVICTION CONFLUENCE ----------
-// everything except the four HTF fib grids is causal in the original too;
-// these gate booleans are reused by the parity recomputation below
 bullGates = isTimeWindow and nearAVWAP and nearFan and bullPA and volOK and
   rsiBullOK and (not requireHTFTrend or htfTrendUp)
 bearGates = isTimeWindow and nearAVWAP and nearFan and bearPA and volOK and
@@ -310,77 +276,13 @@ plot(score4H, "Score: 4H grid", display = display.data_window)
 plot(score1H, "Score: 1H grid", display = display.data_window)
 plot(scoreW, "Score: weekly grid", display = display.data_window)
 
-// ---------- Signal history (for thinkorswim-parity repaint mode) ----------
-var closeA = array.new_float()
-var tolA   = array.new_float()
-var lowA   = array.new_float()
-var highA  = array.new_float()
-var atrA   = array.new_float()
-var mainA  = array.new_float()
-var bullA  = array.new_bool()
-var bearA  = array.new_bool()
-var idxA   = array.new_int()
-
-if barstate.isconfirmed
-    array.push(closeA, close)
-    array.push(tolA, tol)
-    array.push(lowA, low)
-    array.push(highA, high)
-    array.push(atrA, atr)
-    array.push(mainA, scoreMain)
-    array.push(bullA, bullGates)
-    array.push(bearA, bearGates)
-    array.push(idxA, bar_index)
-
 // ---------- Signals ----------
-// causal mode: arrows use only information available at each bar
-// (display.pane keeps these always-0-in-parity-mode series out of the status line)
-plotshape(not repaintParity and showSignals and bullConfluence, "Bull signal (causal)", shape.triangleup, location.belowbar, color.new(color.aqua, 0), size = size.small, display = display.pane)
-plotshape(not repaintParity and showSignals and bearConfluence, "Bear signal (causal)", shape.triangledown, location.abovebar, color.new(color.fuchsia, 0), size = size.small, display = display.pane)
+// (display.pane — the status line already shows "Bull now"/"Bear now")
+plotshape(showSignals and bullConfluence, "Bull signal", shape.triangleup, location.belowbar, color.new(color.aqua, 0), size = size.small, display = display.pane)
+plotshape(showSignals and bearConfluence, "Bear signal", shape.triangledown, location.abovebar, color.new(color.fuchsia, 0), size = size.small, display = display.pane)
 
 alertcondition(bullConfluence, "FON Bull", "Force of Nature: bullish confluence on {{ticker}} {{interval}}")
 alertcondition(bearConfluence, "FON Bear", "Force of Nature: bearish confluence on {{ticker}} {{interval}}")
-
-// parity mode: thinkorswim evaluates the HighestAll grids with the whole
-// chart in view, so its historical arrows use the FINAL swing extremes —
-// recompute history against the last-bar extremes and draw matching labels
-var label[] sigLabels = array.new_label()
-var int lastDrawN = -1
-
-if repaintParity and showSignals and barstate.islast
-    needRedraw = array.size(idxA) != lastDrawN or chg(shD) or chg(slD) or
-      chg(sh4H) or chg(sl4H) or chg(sh1H) or chg(sl1H) or chg(shW) or chg(slW)
-    if needRedraw
-        lastDrawN := array.size(idxA)
-        while array.size(sigLabels) > 0
-            label.delete(array.pop(sigLabels))
-        if array.size(idxA) > 0
-            for i = 0 to array.size(idxA) - 1
-                float c  = array.get(closeA, i)
-                float tl = array.get(tolA, i)
-                float sc = array.get(mainA, i) + fibScore(shD, slD, c, tl) +
-                  fibScore(sh4H, sl4H, c, tl) + fibScore(sh1H, sl1H, c, tl) +
-                  fibScore(shW, slW, c, tl)
-                if sc >= confluenceThreshold
-                    if array.get(bullA, i)
-                        array.push(sigLabels, label.new(array.get(idxA, i), array.get(lowA, i) - array.get(atrA, i) * 0.45, "", xloc.bar_index, yloc.price, color.new(color.aqua, 0), label.style_triangleup, color.aqua, size.small))
-                    if array.get(bearA, i)
-                        array.push(sigLabels, label.new(array.get(idxA, i), array.get(highA, i) + array.get(atrA, i) * 0.45, "", xloc.bar_index, yloc.price, color.new(color.fuchsia, 0), label.style_triangledown, color.fuchsia, size.small))
-        while array.size(sigLabels) > 480
-            label.delete(array.shift(sigLabels))
-
-// live (unconfirmed) bar in parity mode — the causal levels already equal
-// the final levels on the last bar, so the causal condition is exact here
-var label curLbl = na
-if repaintParity and barstate.islast
-    if not na(curLbl)
-        label.delete(curLbl)
-        curLbl := na
-    if showSignals and not barstate.isconfirmed
-        if bullConfluence
-            curLbl := label.new(bar_index, low - atr * 0.45, "", xloc.bar_index, yloc.price, color.new(color.aqua, 0), label.style_triangleup, color.aqua, size.small)
-        else if bearConfluence
-            curLbl := label.new(bar_index, high + atr * 0.45, "", xloc.bar_index, yloc.price, color.new(color.fuchsia, 0), label.style_triangledown, color.fuchsia, size.small)
 
 // ---------- Anchored VWAP Line ----------
 plot(showAVWAP ? avwap : na, "AVWAP", color.new(color.yellow, 0), 2, plot.style_linebr)
