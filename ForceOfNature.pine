@@ -230,11 +230,8 @@ nearFan = not na(fan382) and (math.abs(close - fan382) <= tol or
   math.abs(close - fan50) <= tol or math.abs(close - fan618) <= tol)
 
 // ---------- HTF Trend Filter ----------
-// ExpAverage(close(period = htfAgg), 21) in the original is an EMA over
-// CHART bars of the HTF close step series — replicated exactly (on intraday
-// charts this is NOT a true 21-period EMA of the higher timeframe)
-htfClose = request.security(syminfo.tickerid, timeframe.in_seconds(htfTF) >= chartSec ? htfTF : timeframe.period, close, lookahead = barmerge.lookahead_on)
-htfEMA   = ta.ema(htfClose, 21)
+// true 21-period EMA of the higher timeframe, computed on its own bars
+[htfClose, htfEMA] = request.security(syminfo.tickerid, timeframe.in_seconds(htfTF) >= chartSec ? htfTF : timeframe.period, [close, ta.ema(close, 21)], lookahead = barmerge.lookahead_on)
 htfTrendUp   = not na(htfEMA) and htfClose > htfEMA
 htfTrendDown = not na(htfEMA) and htfClose < htfEMA
 
@@ -252,13 +249,32 @@ rsi = ta.rsi(close, rsiLength)
 rsiExtremeBull = rsi <= rsiOversold
 rsiExtremeBear = rsi >= rsiOverbought
 
-priceLL = low < ta.lowest(low[1], 6)
-rsiHL   = rsi > ta.highest(rsi[1], 6)
-bullDiv = priceLL and rsiHL
+// regular divergence measured swing-to-swing: price sets a lower low while
+// RSI at those two swing lows sets a higher low (mirrored for bearish) —
+// the original compared price lows against same-bar 6-bar RSI highs, a
+// near-contradiction that could never fire
+var float swingLowPrice     = na
+var float swingLowRsi       = na
+var float prevSwingLowPrice = na
+var float prevSwingLowRsi   = na
+if not na(slMain)
+    prevSwingLowPrice := swingLowPrice
+    prevSwingLowRsi   := swingLowRsi
+    swingLowPrice     := slMain
+    swingLowRsi       := rsi[5]
 
-priceHH = high > ta.highest(high[1], 6)
-rsiLH   = rsi < ta.lowest(rsi[1], 6)
-bearDiv = priceHH and rsiLH
+var float swingHighPrice     = na
+var float swingHighRsi       = na
+var float prevSwingHighPrice = na
+var float prevSwingHighRsi   = na
+if not na(shMain)
+    prevSwingHighPrice := swingHighPrice
+    prevSwingHighRsi   := swingHighRsi
+    swingHighPrice     := shMain
+    swingHighRsi       := rsi[5]
+
+bullDiv = not na(prevSwingLowPrice) and swingLowPrice < prevSwingLowPrice and swingLowRsi > prevSwingLowRsi
+bearDiv = not na(prevSwingHighPrice) and swingHighPrice > prevSwingHighPrice and swingHighRsi < prevSwingHighRsi
 
 rsiBullOK = not requireRSI or rsiExtremeBull or bullDiv
 rsiBearOK = not requireRSI or rsiExtremeBear or bearDiv

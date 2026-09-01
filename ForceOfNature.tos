@@ -164,8 +164,11 @@ def nearFan = AbsValue(close - fan382) <= tol or
               AbsValue(close - fan618) <= tol;
 
 # ---------- HTF Trend Filter ----------
+# The EMA must be computed inline on the secondary aggregation: storing the
+# series in a def first flattens it to chart bars, which yields a much
+# faster pseudo-EMA instead of a true 21-period EMA of the higher timeframe
 def htfClose = close(period = htfAgg);
-def htfEMA   = ExpAverage(htfClose, 21);
+def htfEMA   = ExpAverage(close(period = htfAgg), 21);
 def htfTrendUp   = htfClose > htfEMA;
 def htfTrendDown = htfClose < htfEMA;
 
@@ -183,13 +186,21 @@ def rsi = RSI(length = rsiLength);
 def rsiExtremeBull = rsi <= rsiOversold;
 def rsiExtremeBear = rsi >= rsiOverbought;
 
-def priceLL = low < lowest(low[1], 6);
-def rsiHL   = rsi > highest(rsi[1], 6);
-def bullDiv = priceLL and rsiHL;
+# Regular divergence measured swing-to-swing: price sets a lower low while
+# RSI at those two swing lows sets a higher low (mirrored for bearish).
+# The original compared price lows against same-bar 6-bar RSI highs — a
+# near-contradiction that could never fire.
+def swingLowPrice     = if !IsNaN(slMain) then slMain else swingLowPrice[1];
+def swingLowRsi       = if !IsNaN(slMain) then rsi[5] else swingLowRsi[1];
+def prevSwingLowPrice = if !IsNaN(slMain) then swingLowPrice[1] else prevSwingLowPrice[1];
+def prevSwingLowRsi   = if !IsNaN(slMain) then swingLowRsi[1] else prevSwingLowRsi[1];
+def bullDiv = prevSwingLowPrice != 0 and swingLowPrice < prevSwingLowPrice and swingLowRsi > prevSwingLowRsi;
 
-def priceHH = high > highest(high[1], 6);
-def rsiLH   = rsi < lowest(rsi[1], 6);
-def bearDiv = priceHH and rsiLH;
+def swingHighPrice     = if !IsNaN(shMain) then shMain else swingHighPrice[1];
+def swingHighRsi       = if !IsNaN(shMain) then rsi[5] else swingHighRsi[1];
+def prevSwingHighPrice = if !IsNaN(shMain) then swingHighPrice[1] else prevSwingHighPrice[1];
+def prevSwingHighRsi   = if !IsNaN(shMain) then swingHighRsi[1] else prevSwingHighRsi[1];
+def bearDiv = prevSwingHighPrice != 0 and swingHighPrice > prevSwingHighPrice and swingHighRsi < prevSwingHighRsi;
 
 def rsiBullOK = !requireRSI or rsiExtremeBull or bullDiv;
 def rsiBearOK = !requireRSI or rsiExtremeBear or bearDiv;
