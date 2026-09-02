@@ -25,11 +25,12 @@ indicator("Force of Nature (IndicatorFON)", "FON", overlay = true)
 
 // ---------- Inputs ----------
 showSignals         = input.bool(true,  "Show signals")
-confluenceThreshold = input.float(7.5,  "Confluence score threshold", minval = 0, step = 0.5)
+confluenceThreshold = input.float(7.0,  "Confluence score threshold (7.0 = two pockets agree)", minval = 0, step = 0.5)
 toleranceATR        = input.float(0.15, "Level tolerance floor (ATR multiple)", minval = 0, step = 0.01)
 toleranceRangePct   = input.float(0.02, "Level tolerance (fraction of grid range)", minval = 0, step = 0.005)
 avwapBandATR        = input.float(0.25, "AVWAP band (ATR multiple)", minval = 0, step = 0.01)
-minContextGates     = input.int(2,      "Context gates required (time/AVWAP/fan)", minval = 0, maxval = 3)
+minContextGates     = input.int(1,      "Context gates required (time/AVWAP/fan)", minval = 0, maxval = 3)
+armedWindowBars     = input.int(5,      "Armed window before trigger (bars)", minval = 0)
 cooldownBars        = input.int(10,     "Signal cooldown (bars)", minval = 0)
 timeToleranceBars   = input.int(2,      "Time window tolerance (bars)", minval = 0)
 minSwingATR         = input.float(1.5,  "Min chart swing size (ATR multiple)", minval = 0, step = 0.1)
@@ -37,12 +38,13 @@ lookback1H          = input.int(24,     "1H grid lookback (hourly bars)", minval
 lookback4H          = input.int(30,     "4H grid lookback (4-hour bars)", minval = 2)
 lookbackD           = input.int(20,     "Daily grid lookback (days)", minval = 2)
 lookbackW           = input.int(13,     "Weekly grid lookback (weeks)", minval = 2)
-requireVolume       = input.bool(true,  "Require volume surge")
+requireVolume       = input.bool(false, "Require volume surge (measured to veto ~100% of real 1h setups)")
 volumeMult          = input.float(1.3,  "Volume multiple", minval = 0, step = 0.1)
 requireHTFTrend     = input.bool(true,  "Require HTF trend alignment")
 htfTF               = input.timeframe("D", "HTF trend timeframe")
 requireRSI          = input.bool(true,  "Require RSI condition")
 rsiLength           = input.int(14,     "RSI length", minval = 1)
+rsiLookback         = input.int(10,     "RSI extreme lookback (bars)", minval = 1)
 rsiOversold         = input.float(40,   "RSI oversold", minval = 0, maxval = 100)
 rsiOverbought       = input.float(60,   "RSI overbought", minval = 0, maxval = 100)
 showDashboard       = input.bool(true,  "Show dashboard")
@@ -254,8 +256,11 @@ volOK = not requireVolume or volume > volAvg * volumeMult
 // ---------- RSI Extreme + Simple Regular Divergence ----------
 rsi = ta.rsi(close, rsiLength)
 
-rsiExtremeBull = rsi <= rsiOversold
-rsiExtremeBear = rsi >= rsiOverbought
+// recent extreme: same-bar RSI is anti-correlated with zone-sitting (by the
+// time price stabilizes at a level, RSI has mean-reverted), so the gate asks
+// whether RSI visited the extreme within the last rsiLookback bars
+rsiExtremeBull = ta.lowest(rsi, rsiLookback) <= rsiOversold
+rsiExtremeBear = ta.highest(rsi, rsiLookback) >= rsiOverbought
 
 // regular divergence measured swing-to-swing: price sets a lower low while
 // RSI at those two swing lows sets a higher low (mirrored for bearish) —
@@ -288,19 +293,23 @@ rsiBullOK = not requireRSI or rsiExtremeBull or bullDiv
 rsiBearOK = not requireRSI or rsiExtremeBear or bearDiv
 
 // ---------- FULL HIGH-CONVICTION CONFLUENCE ----------
-// time window, AVWAP and fan act as context votes: require K of 3 instead
-// of all three tight bands at once (the old triple-AND multiplied three
-// narrow proximity requirements and made live signals practically impossible)
+// time window, AVWAP and fan act as context votes (K of 3). The armed state
+// (score + context + RSI + trend) is a multi-bar condition; the trigger bar
+// (price action + optional volume) is a one-bar event. Requiring both on
+// the same bar multiplied a ~2% event into a ~never event (measured over 7
+// symbol-months of hourly data), so a signal fires when the trigger prints
+// while the side was armed within the last armedWindowBars bars.
 contextCount = (isTimeWindow ? 1 : 0) + (nearAVWAP ? 1 : 0) + (nearFan ? 1 : 0)
 contextOK = contextCount >= minContextGates
 
-bullGates = contextOK and bullPA and volOK and
-  rsiBullOK and (not requireHTFTrend or htfTrendUp)
-bearGates = contextOK and bearPA and volOK and
-  rsiBearOK and (not requireHTFTrend or htfTrendDown)
+armedBull = isPriceConfluence and contextOK and rsiBullOK and (not requireHTFTrend or htfTrendUp)
+armedBear = isPriceConfluence and contextOK and rsiBearOK and (not requireHTFTrend or htfTrendDown)
 
-bullConfluence = bullGates and isPriceConfluence
-bearConfluence = bearGates and isPriceConfluence
+armedBullRecent = ta.highest(armedBull ? 1 : 0, armedWindowBars + 1) > 0
+armedBearRecent = ta.highest(armedBear ? 1 : 0, armedWindowBars + 1) > 0
+
+bullConfluence = armedBullRecent and bullPA and volOK
+bearConfluence = armedBearRecent and bearPA and volOK
 
 // suppress signal clusters: once a signal fires, stand down for N bars
 var int lastSigBar = -1000000
@@ -309,11 +318,6 @@ bullSig = bullConfluence and canFire
 bearSig = bearConfluence and canFire
 if bullSig or bearSig
     lastSigBar := bar_index
-
-// "armed": full setup context in place, awaiting only the trigger bar
-// (price action + volume). Exposed as plots for the Pine Screener.
-armedBull = isPriceConfluence and contextOK and rsiBullOK and (not requireHTFTrend or htfTrendUp)
-armedBear = isPriceConfluence and contextOK and rsiBearOK and (not requireHTFTrend or htfTrendDown)
 
 // ---------- Diagnostics (status line + data window, nothing on the pane) ----------
 // hover any bar with the Data Window open to see which gates pass (1) or fail (0)

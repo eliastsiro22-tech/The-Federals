@@ -25,35 +25,27 @@ Both platform versions are maintained in lockstep and run identical logic:
 
 ## Signal pipeline
 
+The structure separates a multi-bar **armed state** from a one-bar **trigger** — requiring them on the same bar was measured to make signals practically impossible (see [`analysis/`](analysis/)).
+
 ```mermaid
 flowchart LR
-    subgraph DATA["Market data"]
+    subgraph ARM["Armed state — all must hold (multi-bar)"]
         direction TB
-        OHLC["Chart OHLC + Volume"]
-        MTF["1H · 4H · Daily · Weekly ranges"]
+        A1["Fib confluence score ≥ 7.0<br/>across 5 timeframe grids"]
+        A2["RSI at extreme within<br/>last 10 bars, or divergence"]
+        A3["HTF trend alignment<br/>daily 21 EMA"]
+        A4["Context votes ≥ 1 of 3:<br/>time window · AVWAP · fan"]
     end
 
-    subgraph HARD["Hard gates — all must pass"]
+    subgraph TRIG["Trigger bar — one-bar event"]
         direction TB
-        G1["Fib confluence score ≥ 7.5<br/>across 5 timeframe grids"]
-        G2["Reversal price action<br/>sweep + strong close"]
-        G3["Volume surge<br/>&gt; 1.3 × 20-bar average"]
-        G4["RSI extreme or<br/>swing-to-swing divergence"]
-        G5["HTF trend alignment<br/>daily 21 EMA"]
+        T1["Reversal price action<br/>sweep + strong close"]
+        T2["Volume surge<br/>(optional, off by default)"]
     end
 
-    subgraph CTX["Context votes — 2 of 3"]
-        direction TB
-        C1["Fib time window"]
-        C2["Anchored VWAP band"]
-        C3["Fib fan ray"]
-    end
-
-    OHLC --> HARD
-    MTF --> HARD
-    OHLC --> CTX
-    HARD --> AND(("AND"))
-    CTX --> AND
+    ARM --> WIN["Armed within<br/>last 5 bars"]
+    WIN --> AND(("AND"))
+    TRIG --> AND
     AND --> CD["Cooldown ≥ 10 bars"]
     CD -->|bullish side| BULL["▲ Bull signal — cyan"]
     CD -->|bearish side| BEAR["▼ Bear signal — magenta"]
@@ -87,17 +79,19 @@ Each timeframe's grid is anchored to its **recent trading range** — the last N
               ── 1.618 extension (down) ──     +1.5
 ```
 
-The golden pocket and its bearish mirror score equally, so short setups are not structurally under-weighted. Each level's tolerance band has an ATR floor (0.15×) and widens with the grid's range (2%) — a weekly level gets a wider band than a 1-hour level. The summed score must reach **`confluenceThreshold` (7.5)**, which requires real agreement across multiple timeframes.
+The golden pocket and its bearish mirror score equally, so short setups are not structurally under-weighted. Each level's tolerance band has an ATR floor (0.15×) and widens with the grid's range (2%) — a weekly level gets a wider band than a 1-hour level. The summed score must reach **`confluenceThreshold` (7.0)** — exactly "two timeframes' pockets agree" given the 3.5-point weights. (Measured on hourly data, scores are quantized in 3.5 steps; the old 7.5 default sat in a dead zone just above the natural two-pocket cluster.)
 
-### Stage 3 — Context votes: time, AVWAP, fan (2 of 3 required)
+### Stage 3 — Context votes: time, AVWAP, fan (≥ 1 of 3 by default)
 
-Three location/timing conditions vote instead of all being mandatory — the old triple-AND of narrow bands made live signals practically impossible:
+Three location/timing conditions vote instead of all being mandatory. Gate-frequency measurement showed the trio is roughly *independent* of the fib zones (it doesn't "confirm" them, it's a separate lottery), so demanding 2+ multiplied rarity without adding information — the default is now 1, with the requirement as an input:
 
 - **Fib time window:** the last leg's duration projected forward at 0.382/0.5/0.618/1.0/1.618; the bar must land within a window that scales with leg length (5% of span). Requires a real leg (span ≥ 8 bars).
 - **Anchored VWAP:** volume-weighted average price anchored at the last swing; price within 0.25×ATR.
 - **Fib fan:** rays from the last swing at 38.2/50/61.8% of the leg's slope; price within the chart grid's tolerance.
 
-### Stage 4 — Reversal price action (hard gate)
+### Stage 4 — Reversal price action (trigger bar)
+
+The trigger is accepted while the armed state (Stages 2–3 plus RSI and trend) held at any point within the last **5 bars** (`armedWindowBars`). Setups are multi-bar states; triggers are one-bar events — decoupling them is what makes the signal physically achievable while keeping every condition.
 
 | Side | Requirements |
 |---|---|
@@ -106,13 +100,13 @@ Three location/timing conditions vote instead of all being mandatory — the old
 
 A sweep-and-reclaim hammer for longs; a sweep-and-reject shooting star for shorts.
 
-### Stage 5 — Volume surge (hard gate, toggleable)
+### Stage 5 — Volume surge (advisory, off by default)
 
-Bar volume above **1.3× the 20-bar average**. Note that extended-hours bars distort the average — keep the extended-hours setting consistent when comparing platforms.
+Bar volume above **1.3× the 20-bar average**. **Off by default:** measured over 7 symbol-months of hourly data, this requirement vetoed *every* otherwise-complete signal — on hourly bars the 20-bar volume average mostly encodes time of day (open/close spikes), and pullback-completion bars tend to print on quiet midday tape. Enable `requireVolume` to restore it as a hard gate. Extended-hours bars distort the average — keep that setting consistent when comparing platforms.
 
 ### Stage 6 — RSI extreme or divergence (hard gate, toggleable)
 
-RSI(14) at an extreme (≤40 for longs, ≥60 for shorts), **or** a regular divergence measured swing-to-swing: price sets a lower low across the two most recent swing lows while RSI at those same pivots sets a higher low (mirrored for bearish).
+RSI(14) at an extreme **within the last 10 bars** (`rsiLookback`) — ≤40 for longs, ≥60 for shorts — **or** a regular divergence measured swing-to-swing: price sets a lower low across the two most recent swing lows while RSI at those same pivots sets a higher low (mirrored for bearish). The lookback window matters: same-bar extremes measured *anti-correlated* with price sitting at a fib zone (by the time price stabilizes at a level, RSI has mean-reverted), which silently killed nearly all setups.
 
 ### Stage 7 — Higher-timeframe trend (hard gate, toggleable)
 
@@ -142,18 +136,19 @@ Dashboard fields: `Score` (current confluence total), `Time / AVWAP / Fan` (✓/
 | Input | Default | Description |
 |---|---|---|
 | `showSignals` | `yes` | Master toggle for the arrows |
-| `confluenceThreshold` | `7.5` | Minimum summed Fib score |
+| `confluenceThreshold` | `7.0` | Minimum summed Fib score (7.0 = two pockets agree) |
 | `toleranceATR` | `0.15` | Level-proximity band floor, in ATRs |
 | `toleranceRangePct` | `0.02` | Level band as a fraction of each grid's range |
 | `avwapBandATR` | `0.25` | AVWAP proximity band, in ATRs |
-| `minContextGates` | `2` | Context votes required (of time / AVWAP / fan) |
+| `minContextGates` | `1` | Context votes required (of time / AVWAP / fan) |
+| `armedWindowBars` | `5` | Bars the armed state remains valid for a trigger |
 | `cooldownBars` | `10` | Bars to stand down after a signal |
 | `timeToleranceBars` | `2` | Minimum time-window tolerance |
 | `minSwingATR` | `1.5` | Minimum chart swing size, in ATRs |
 | `lookback1H / 4H / D / W` | `24 / 30 / 20 / 13` | Bars of each timeframe defining its grid range |
-| `requireVolume` / `volumeMult` | `yes` / `1.3` | Volume gate |
+| `requireVolume` / `volumeMult` | `no` / `1.3` | Volume gate (advisory by default — see Stage 5) |
 | `requireHTFTrend` / `htfAgg` | `yes` / `DAY` | Trend gate and its timeframe |
-| `requireRSI` / `rsiLength` / `rsiOversold` / `rsiOverbought` | `yes` / `14` / `40` / `60` | RSI gate |
+| `requireRSI` / `rsiLength` / `rsiLookback` / `rsiOversold` / `rsiOverbought` | `yes` / `14` / `10` / `40` / `60` | RSI gate |
 | `showDashboard` / `showAVWAP` | `yes` | Display toggles (TV adds dashboard position) |
 
 ---
@@ -178,7 +173,7 @@ Scanning for the *full* signal returns almost nothing — the trigger bar is a o
 
 ## Design notes & caveats
 
-- **Signals are rare by design** — five hard gates, a 2-of-3 context vote, and a cooldown. Use the dashboard/Data Window to see how close conditions are; loosen `confluenceThreshold` or gate toggles to trade frequency for selectivity.
+- **Signals are rare by design, but calibrated on evidence** — the armed-state + trigger structure and the default thresholds were tuned by measuring each gate's actual pass rate over 7 symbol-months of hourly data ([`analysis/`](analysis/)); expected frequency is roughly 0.5–1 signal per symbol per month on 1h charts. Use the dashboard/Data Window to see how close conditions are; tighten or loosen `confluenceThreshold`, `minContextGates`, and `requireVolume` to trade frequency for selectivity.
 - **Non-repainting by construction:** grids use fixed per-timeframe lookbacks, all other gates are causal, and pivots confirm 5 bars after the fact. Levels still update within the *current* HTF bar (as any HTF-aware indicator does), but a printed arrow never disappears when later bars arrive.
 - RSI and EMA warm-up means the first ~20 bars of a chart can't signal; the weekly grid needs 13 weeks of data to be meaningful.
 - This is an **analysis tool, not financial advice**. Backtest and paper-trade before risking capital.

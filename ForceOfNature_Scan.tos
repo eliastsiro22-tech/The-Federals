@@ -23,12 +23,13 @@ input toleranceATR        = 0.25;   # band around each grid's 50% level
 input lookback1H          = 24;     # chart bars (run the filter at 1h)
 input lookback4H          = 120;    # ~30 four-hour bars, in 1h RTH bars
 input lookbackD           = 140;    # ~20 days, in 1h RTH bars
-input requireVolume       = yes;
+input requireVolume       = no;     # advisory: the 1.3x surge vetoed ~100% of real 1h setups
 input volumeMult          = 1.3;
 input requireHTFTrend     = yes;
 input trendLen            = 150;    # ~21 days of 1h RTH bars (daily EMA proxy)
 input requireRSI          = yes;
 input rsiLength           = 14;
+input rsiLookback         = 10;     # RSI extreme within last N bars counts
 input rsiOversold         = 40;
 input rsiOverbought       = 60;
 
@@ -75,8 +76,8 @@ def bearPA = high > high[1] and close < open and close < close[1] and
 def volOK = !requireVolume or volume > volAvg * volumeMult;
 
 # ---------- Assembly ----------
-def bullArmed = inZones and (!requireRSI or rsi <= rsiOversold) and (!requireHTFTrend or close > htfEMA);
-def bearArmed = inZones and (!requireRSI or rsi >= rsiOverbought) and (!requireHTFTrend or close < htfEMA);
+def bullArmed = inZones and (!requireRSI or Lowest(rsi, rsiLookback) <= rsiOversold) and (!requireHTFTrend or close > htfEMA);
+def bearArmed = inZones and (!requireRSI or Highest(rsi, rsiLookback) >= rsiOverbought) and (!requireHTFTrend or close < htfEMA);
 
 def bullPick = if mode == mode.Armed then bullArmed else bullArmed and bullPA and volOK;
 def bearPick = if mode == mode.Armed then bearArmed else bearArmed and bearPA and volOK;

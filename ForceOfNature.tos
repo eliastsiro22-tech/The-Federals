@@ -11,11 +11,12 @@
 declare upper;
 
 input showSignals           = yes;
-input confluenceThreshold   = 7.5;      # Weighted score threshold
+input confluenceThreshold   = 7.0;      # Weighted score threshold (7.0 = two pockets agree)
 input toleranceATR          = 0.15;     # proximity band floor, ATR multiple
 input toleranceRangePct     = 0.02;     # proximity band as fraction of each grid's range
 input avwapBandATR          = 0.25;     # AVWAP proximity band, ATR multiple
-input minContextGates       = 2;        # of: time window, AVWAP, fan (0-3)
+input minContextGates       = 1;        # of: time window, AVWAP, fan (0-3)
+input armedWindowBars       = 5;        # trigger accepted while armed within last N bars
 input cooldownBars          = 10;       # bars to stand down after a signal
 input timeToleranceBars     = 2;
 input minSwingATR           = 1.5;
@@ -23,12 +24,13 @@ input lookback1H            = 24;       # 1H grid: last N hourly bars
 input lookback4H            = 30;       # 4H grid: last N 4-hour bars
 input lookbackD             = 20;       # Daily grid: last N days
 input lookbackW             = 13;       # Weekly grid: last N weeks
-input requireVolume         = yes;
+input requireVolume         = no;       # advisory by default: the 1.3x surge vetoed ~100% of real 1h setups
 input volumeMult            = 1.3;
 input requireHTFTrend       = yes;
 input htfAgg                = AggregationPeriod.DAY;
 input requireRSI            = yes;
 input rsiLength             = 14;
+input rsiLookback           = 10;       # RSI extreme within last N bars counts
 input rsiOversold           = 40;
 input rsiOverbought         = 60;
 input showDashboard         = yes;
@@ -218,8 +220,11 @@ def volOK = !requireVolume or volume > volAvg * volumeMult;
 # ---------- RSI Extreme + Simple Regular Divergence ----------
 def rsi = RSI(length = rsiLength);
 
-def rsiExtremeBull = rsi <= rsiOversold;
-def rsiExtremeBear = rsi >= rsiOverbought;
+# recent extreme: same-bar RSI is anti-correlated with zone-sitting (by the
+# time price stabilizes at a level, RSI has mean-reverted), so the gate asks
+# whether RSI visited the extreme within the last rsiLookback bars
+def rsiExtremeBull = Lowest(rsi, rsiLookback) <= rsiOversold;
+def rsiExtremeBear = Highest(rsi, rsiLookback) >= rsiOverbought;
 
 # Regular divergence measured swing-to-swing: price sets a lower low while
 # RSI at those two swing lows sets a higher low (mirrored for bearish).
@@ -241,27 +246,23 @@ def rsiBullOK = !requireRSI or rsiExtremeBull or bullDiv;
 def rsiBearOK = !requireRSI or rsiExtremeBear or bearDiv;
 
 # ---------- FULL HIGH-CONVICTION CONFLUENCE ----------
-# time window, AVWAP and fan act as context votes: require K of 3 instead of
-# all three tight bands at once (the old triple-AND multiplied three narrow
-# proximity requirements and made live signals practically impossible)
+# time window, AVWAP and fan act as context votes (K of 3). The armed state
+# (score + context + RSI + trend) is a multi-bar condition; the trigger bar
+# (price action + optional volume) is a one-bar event. Requiring both on the
+# same bar multiplied a ~2% event into a ~never event (measured over 7
+# symbol-months of hourly data), so a signal fires when the trigger prints
+# while the side was armed within the last armedWindowBars bars.
 def contextCount = (if isTimeWindow then 1 else 0) + (if nearAVWAP then 1 else 0) + (if nearFan then 1 else 0);
 def contextOK = contextCount >= minContextGates;
 
-def bullConfluence =
-    isPriceConfluence and
-    contextOK and
-    bullPA and
-    volOK and
-    rsiBullOK and
-    (!requireHTFTrend or htfTrendUp);
+def bullArmed = isPriceConfluence and contextOK and rsiBullOK and (!requireHTFTrend or htfTrendUp);
+def bearArmed = isPriceConfluence and contextOK and rsiBearOK and (!requireHTFTrend or htfTrendDown);
 
-def bearConfluence =
-    isPriceConfluence and
-    contextOK and
-    bearPA and
-    volOK and
-    rsiBearOK and
-    (!requireHTFTrend or htfTrendDown);
+def bullArmedRecent = Highest(if bullArmed then 1 else 0, armedWindowBars + 1) > 0;
+def bearArmedRecent = Highest(if bearArmed then 1 else 0, armedWindowBars + 1) > 0;
+
+def bullConfluence = bullArmedRecent and bullPA and volOK;
+def bearConfluence = bearArmedRecent and bearPA and volOK;
 
 # suppress signal clusters: once a signal fires, stand down for N bars
 def lastSigBar = if (bullConfluence or bearConfluence) and bn - lastSigBar[1] > cooldownBars then bn else lastSigBar[1];
