@@ -281,8 +281,8 @@ if not na(shMain)
     swingHighPrice     := shMain
     swingHighRsi       := rsi[5]
 
-bullDiv = not na(prevSwingLowPrice) and swingLowPrice < prevSwingLowPrice and swingLowRsi > prevSwingLowRsi
-bearDiv = not na(prevSwingHighPrice) and swingHighPrice > prevSwingHighPrice and swingHighRsi < prevSwingHighRsi
+bullDiv = not na(prevSwingLowPrice) and not na(swingLowRsi) and not na(prevSwingLowRsi) and swingLowPrice < prevSwingLowPrice and swingLowRsi > prevSwingLowRsi
+bearDiv = not na(prevSwingHighPrice) and not na(swingHighRsi) and not na(prevSwingHighRsi) and swingHighPrice > prevSwingHighPrice and swingHighRsi < prevSwingHighRsi
 
 rsiBullOK = not requireRSI or rsiExtremeBull or bullDiv
 rsiBearOK = not requireRSI or rsiExtremeBear or bearDiv

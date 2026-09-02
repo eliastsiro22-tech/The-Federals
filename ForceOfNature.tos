@@ -175,7 +175,7 @@ def isTimeWindow =
 # Sum() requires a constant length in thinkScript, so the anchored sums are
 # accumulated recursively. A new anchor always confirms exactly 5 bars after
 # its pivot, so the window re-seeds with the last 6 bars.
-def newAnchor = lastSwingBar != lastSwingBar[1];
+def newAnchor = CompoundValue(1, lastSwingBar != lastSwingBar[1], no);
 def cumPV = if newAnchor then Sum(close * volume, 6) else cumPV[1] + close * volume;
 def cumV  = if newAnchor then Sum(volume, 6) else cumV[1] + volume;
 def avwap = if bn >= lastSwingBar and cumV != 0 then cumPV / cumV else na;
@@ -202,8 +202,10 @@ def nearFan = AbsValue(close - fan382) <= tolMain or
 # faster pseudo-EMA instead of a true 21-period EMA of the higher timeframe
 def htfClose = close(period = htfAgg);
 def htfEMA   = ExpAverage(close(period = htfAgg), 21);
-def htfTrendUp   = htfClose > htfEMA;
-def htfTrendDown = htfClose < htfEMA;
+# NaN guard: with too little history for the EMA (needs 21 HTF bars) the
+# trend is unknown — show "─" and block cleanly instead of NaN-poisoning
+def htfTrendUp   = !IsNaN(htfEMA) and htfClose > htfEMA;
+def htfTrendDown = !IsNaN(htfEMA) and htfClose < htfEMA;
 
 # ---------- Quality Price Action + Volume ----------
 def bullPA = low < low[1] and close > open and close > close[1] and
@@ -227,13 +229,13 @@ def swingLowPrice     = if !IsNaN(slMain) then slMain else swingLowPrice[1];
 def swingLowRsi       = if !IsNaN(slMain) then rsi[5] else swingLowRsi[1];
 def prevSwingLowPrice = if !IsNaN(slMain) then swingLowPrice[1] else prevSwingLowPrice[1];
 def prevSwingLowRsi   = if !IsNaN(slMain) then swingLowRsi[1] else prevSwingLowRsi[1];
-def bullDiv = prevSwingLowPrice != 0 and swingLowPrice < prevSwingLowPrice and swingLowRsi > prevSwingLowRsi;
+def bullDiv = !IsNaN(swingLowRsi) and !IsNaN(prevSwingLowRsi) and prevSwingLowPrice != 0 and swingLowPrice < prevSwingLowPrice and swingLowRsi > prevSwingLowRsi;
 
 def swingHighPrice     = if !IsNaN(shMain) then shMain else swingHighPrice[1];
 def swingHighRsi       = if !IsNaN(shMain) then rsi[5] else swingHighRsi[1];
 def prevSwingHighPrice = if !IsNaN(shMain) then swingHighPrice[1] else prevSwingHighPrice[1];
 def prevSwingHighRsi   = if !IsNaN(shMain) then swingHighRsi[1] else prevSwingHighRsi[1];
-def bearDiv = prevSwingHighPrice != 0 and swingHighPrice > prevSwingHighPrice and swingHighRsi < prevSwingHighRsi;
+def bearDiv = !IsNaN(swingHighRsi) and !IsNaN(prevSwingHighRsi) and prevSwingHighPrice != 0 and swingHighPrice > prevSwingHighPrice and swingHighRsi < prevSwingHighRsi;
 
 def rsiBullOK = !requireRSI or rsiExtremeBull or bullDiv;
 def rsiBearOK = !requireRSI or rsiExtremeBear or bearDiv;
