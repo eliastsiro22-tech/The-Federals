@@ -142,7 +142,9 @@ Dashboard fields: `Score` (current confluence total), `Time / AVWAP / Fan` (✓/
 | `toleranceRangePct` | `0.02` | Level band as a fraction of each grid's range |
 | `avwapBandATR` | `0.25` | AVWAP proximity band, in ATRs |
 | `minContextGates` | `1` | Context votes required (of time / AVWAP / fan) |
-| `armedWindowBars` | `5` | Bars the armed state remains valid for a trigger |
+| `armedWindowBars` | `5` | Bars the armed state remains valid for a trigger (trend is re-asserted on the trigger bar itself, so a market that breaks down mid-window can't be bought) |
+| `requireHTFGrid` | `no` | Big-structure mode: arm only when the daily/weekly grids contribute ≥ 3.5 — fewer, larger-target signals (measured ~60% fewer) |
+| `gapGuard` / `gapATRmult` / `gapStandDownBars` | `no` / `3.0` / `35` | Optional counter-gap stand-down: block signals against a fresh large session gap (earnings protection; also blocks some legitimate post-gap fades) |
 | `cooldownBars` | `10` | Bars to stand down after a signal |
 | `timeToleranceBars` | `2` | Minimum time-window tolerance |
 | `minSwingATR` | `1.5` | Minimum chart swing size, in ATRs |

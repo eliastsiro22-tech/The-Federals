@@ -42,3 +42,24 @@ node gate-frequency-sim.js
 
 Caveats: 3 symbols, one market regime, frequency measured — **not**
 profitability. Forward paper-testing remains the real validation.
+
+## Second pass — trigger-guard calibration (Sep 2)
+
+After the first live arrows (a knife-catch bull on MRVL post-earnings, a
+winning AMD short, mixed AAPL/MSFT), `calibration-filters-sim.js` replayed
+six symbols (~14 symbol-months) and tested three candidate guards against
+the 13 signals the current defaults produce:
+
+- **Trend re-check on the trigger bar** — cost: 1 of 13 signals. The armed
+  window let a trigger fire after price had crashed through the trend EMA
+  (exactly the MRVL failure). Shipped **on** (folded into the trend gate).
+- **Gap stand-down** (block signals against a >3×ATR session gap for 35
+  bars) — killed the MRVL-style knife but also killed winning post-gap
+  fades (AMD shorts). Shipped as **input, off by default** (`gapGuard`).
+- **HTF-grid participation** (daily/weekly grids must contribute ≥ 3.5 to
+  arm) — filters to big-structure signals, 13 → 5. Too aggressive to
+  default; shipped as **input, off by default** (`requireHTFGrid`) — it is
+  the dial for "small-move" signals armed only by the 1H/4H grids.
+
+Session note: signals differ between RTH and extended-hours charts (ATR,
+pivots, and volume averages all shift); the analyses here use RTH data.

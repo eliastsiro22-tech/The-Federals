@@ -31,6 +31,10 @@ toleranceRangePct   = input.float(0.02, "Level tolerance (fraction of grid range
 avwapBandATR        = input.float(0.25, "AVWAP band (ATR multiple)", minval = 0, step = 0.01)
 minContextGates     = input.int(1,      "Context gates required (time/AVWAP/fan)", minval = 0, maxval = 3)
 armedWindowBars     = input.int(5,      "Armed window before trigger (bars)", minval = 0)
+requireHTFGrid      = input.bool(false, "Require daily/weekly grid participation (big-structure signals)")
+gapGuard            = input.bool(false, "Block counter-gap signals after a large session gap")
+gapATRmult          = input.float(3.0,  "Gap size threshold (ATR multiple)", minval = 0, step = 0.5)
+gapStandDownBars    = input.int(35,     "Gap stand-down (bars)", minval = 0)
 cooldownBars        = input.int(10,     "Signal cooldown (bars)", minval = 0)
 timeToleranceBars   = input.int(2,      "Time window tolerance (bars)", minval = 0)
 minSwingATR         = input.float(1.5,  "Min chart swing size (ATR multiple)", minval = 0, step = 0.1)
@@ -302,14 +306,34 @@ rsiBearOK = not requireRSI or rsiExtremeBear or bearDiv
 contextCount = (isTimeWindow ? 1 : 0) + (nearAVWAP ? 1 : 0) + (nearFan ? 1 : 0)
 contextOK = contextCount >= minContextGates
 
-armedBull = isPriceConfluence and contextOK and rsiBullOK and (not requireHTFTrend or htfTrendUp)
-armedBear = isPriceConfluence and contextOK and rsiBearOK and (not requireHTFTrend or htfTrendDown)
+htfGridOK = not requireHTFGrid or scoreD + scoreW >= 3.5
+
+armedBull = isPriceConfluence and contextOK and rsiBullOK and htfGridOK and (not requireHTFTrend or htfTrendUp)
+armedBear = isPriceConfluence and contextOK and rsiBearOK and htfGridOK and (not requireHTFTrend or htfTrendDown)
 
 armedBullRecent = ta.highest(armedBull ? 1 : 0, armedWindowBars + 1) > 0
 armedBearRecent = ta.highest(armedBear ? 1 : 0, armedWindowBars + 1) > 0
 
-bullConfluence = armedBullRecent and bullPA and volOK
-bearConfluence = armedBearRecent and bearPA and volOK
+// optional counter-gap stand-down: a large session gap invalidates the
+// range statistics the grids were built from; block mean-reversion signals
+// against the gap's direction for a while (off by default — it also blocks
+// some legitimate post-gap fades, measured on 14 symbol-months)
+sessionGap = math.abs(open - close[1]) > atr * gapATRmult
+var int lastGapDnBar = na
+var int lastGapUpBar = na
+if sessionGap and open < close[1]
+    lastGapDnBar := bar_index
+if sessionGap and open > close[1]
+    lastGapUpBar := bar_index
+gapBlockBull = gapGuard and not na(lastGapDnBar) and bar_index - lastGapDnBar <= gapStandDownBars
+gapBlockBear = gapGuard and not na(lastGapUpBar) and bar_index - lastGapUpBar <= gapStandDownBars
+
+// trigger-time trend re-check: the armed window lets the TRIGGER lag the
+// setup, not the market state rot — in a fast decline price can slide below
+// the trend EMA between arming and trigger (the knife-catch failure mode);
+// measured cost of re-asserting trend at the trigger: ~1 signal in 13
+bullConfluence = armedBullRecent and bullPA and volOK and (not requireHTFTrend or htfTrendUp) and not gapBlockBull
+bearConfluence = armedBearRecent and bearPA and volOK and (not requireHTFTrend or htfTrendDown) and not gapBlockBear
 
 // suppress signal clusters: once a signal fires, stand down for N bars
 var int lastSigBar = -1000000

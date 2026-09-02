@@ -17,6 +17,10 @@ input toleranceRangePct     = 0.02;     # proximity band as fraction of each gri
 input avwapBandATR          = 0.25;     # AVWAP proximity band, ATR multiple
 input minContextGates       = 1;        # of: time window, AVWAP, fan (0-3)
 input armedWindowBars       = 5;        # trigger accepted while armed within last N bars
+input requireHTFGrid        = no;       # arm only if daily/weekly grids contribute >= 3.5 (big-structure signals)
+input gapGuard              = no;       # block counter-gap signals after a fresh large session gap
+input gapATRmult            = 3.0;      # gap size threshold, ATR multiple
+input gapStandDownBars      = 35;       # ~5 RTH days on a 1h chart
 input cooldownBars          = 10;       # bars to stand down after a signal
 input timeToleranceBars     = 2;
 input minSwingATR           = 1.5;
@@ -255,14 +259,30 @@ def rsiBearOK = !requireRSI or rsiExtremeBear or bearDiv;
 def contextCount = (if isTimeWindow then 1 else 0) + (if nearAVWAP then 1 else 0) + (if nearFan then 1 else 0);
 def contextOK = contextCount >= minContextGates;
 
-def bullArmed = isPriceConfluence and contextOK and rsiBullOK and (!requireHTFTrend or htfTrendUp);
-def bearArmed = isPriceConfluence and contextOK and rsiBearOK and (!requireHTFTrend or htfTrendDown);
+def htfGridOK = !requireHTFGrid or scoreD + scoreW >= 3.5;
+
+def bullArmed = isPriceConfluence and contextOK and rsiBullOK and htfGridOK and (!requireHTFTrend or htfTrendUp);
+def bearArmed = isPriceConfluence and contextOK and rsiBearOK and htfGridOK and (!requireHTFTrend or htfTrendDown);
 
 def bullArmedRecent = Highest(if bullArmed then 1 else 0, armedWindowBars + 1) > 0;
 def bearArmedRecent = Highest(if bearArmed then 1 else 0, armedWindowBars + 1) > 0;
 
-def bullConfluence = bullArmedRecent and bullPA and volOK;
-def bearConfluence = bearArmedRecent and bearPA and volOK;
+# optional counter-gap stand-down: a large session gap invalidates the
+# range statistics the grids were built from; block mean-reversion signals
+# against the gap's direction for a while (off by default — it also blocks
+# some legitimate post-gap fades, measured on 14 symbol-months)
+def sessionGap = AbsValue(open - close[1]) > atr * gapATRmult;
+def lastGapDnBar = if sessionGap and open < close[1] then bn else lastGapDnBar[1];
+def lastGapUpBar = if sessionGap and open > close[1] then bn else lastGapUpBar[1];
+def gapBlockBull = gapGuard and lastGapDnBar > 0 and bn - lastGapDnBar <= gapStandDownBars;
+def gapBlockBear = gapGuard and lastGapUpBar > 0 and bn - lastGapUpBar <= gapStandDownBars;
+
+# trigger-time trend re-check: the armed window lets the TRIGGER lag the
+# setup, not the market state rot — in a fast decline price can slide below
+# the trend EMA between arming and trigger (the knife-catch failure mode);
+# measured cost of re-asserting trend at the trigger: ~1 signal in 13
+def bullConfluence = bullArmedRecent and bullPA and volOK and (!requireHTFTrend or htfTrendUp) and !gapBlockBull;
+def bearConfluence = bearArmedRecent and bearPA and volOK and (!requireHTFTrend or htfTrendDown) and !gapBlockBear;
 
 # suppress signal clusters: once a signal fires, stand down for N bars
 def lastSigBar = if (bullConfluence or bearConfluence) and bn - lastSigBar[1] > cooldownBars then bn else lastSigBar[1];
