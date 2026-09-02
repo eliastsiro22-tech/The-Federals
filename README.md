@@ -17,7 +17,8 @@ Both platform versions are maintained in lockstep and run identical logic:
 
 - **thinkorswim:** [`ForceOfNature.tos`](ForceOfNature.tos)
 - **TradingView (Pine v6):** [`ForceOfNature.pine`](ForceOfNature.pine)
-- **Design / port history:** [`docs/pine-conversion.md`](docs/pine-conversion.md)
+- **Project history — the full journey:** [`docs/history.md`](docs/history.md)
+- **Port analysis:** [`docs/pine-conversion.md`](docs/pine-conversion.md)
 
 > This is a redesigned descendant of the original script: several genuine bugs were fixed (a non-compiling `Sum()`, NaN score poisoning, inverted divergence logic, a pseudo-EMA trend filter) and the Fibonacci grids were re-anchored so signals no longer repaint or depend on how much chart history is loaded. The full change history is in the git log; design rationale is in the [docs](docs/pine-conversion.md).
 
